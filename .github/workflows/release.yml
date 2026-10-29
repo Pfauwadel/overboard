@@ -1,0 +1,123 @@
+# Pushing a tag such as v1.2.3 builds Overboard for every platform and publishes
+# a GitHub release with the downloads. Run it by hand (Actions → Release → Run workflow)
+# to get the same files as workflow artifacts, without publishing anything.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version number written in the build (no release is published)
+        default: 0.0.0-dev
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PROJECT: src/Overboard/Overboard.csproj
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Version
+        run: echo "VERSION=${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}" | sed 's/=v/=/' >> "$GITHUB_ENV"
+      - name: Publish
+        run: |
+          mkdir -p dist
+          for rid in win-x64 win-arm64; do
+            dotnet publish "$PROJECT" -c Release -r "$rid" -p:Version="$VERSION" -o "out/$rid"
+            7z a -tzip "dist/Overboard-$VERSION-$rid.zip" "./out/$rid/Overboard.exe"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Version
+        run: echo "VERSION=${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}" | sed 's/=v/=/' >> "$GITHUB_ENV"
+      - name: Publish
+        run: |
+          rid=linux-x64
+          dotnet publish "$PROJECT" -c Release -r "$rid" -p:Version="$VERSION" -o "out/$rid"
+          cp src/Overboard/Assets/overboard.png "out/$rid/"
+          mkdir -p dist
+          tar -czf "dist/Overboard-$VERSION-$rid.tar.gz" -C "out/$rid" Overboard overboard.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Version
+        run: echo "VERSION=${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}" | sed 's/=v/=/' >> "$GITHUB_ENV"
+      - name: Icon
+        run: |
+          mkdir Overboard.iconset
+          for size in 16 32 128 256; do
+            sips -z $size $size src/Overboard/Assets/overboard.png --out "Overboard.iconset/icon_${size}x${size}.png"
+          done
+          cp Overboard.iconset/icon_32x32.png Overboard.iconset/icon_16x16@2x.png
+          cp Overboard.iconset/icon_256x256.png Overboard.iconset/icon_128x128@2x.png
+          sips -z 64 64 src/Overboard/Assets/overboard.png --out Overboard.iconset/icon_32x32@2x.png
+          iconutil -c icns Overboard.iconset -o Overboard.icns
+      - name: Publish
+        run: |
+          mkdir -p dist
+          for rid in osx-arm64 osx-x64; do
+            dotnet publish "$PROJECT" -c Release -r "$rid" -p:Version="$VERSION" -o "out/$rid"
+            app="bundle/$rid/Overboard.app"
+            mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+            cp "out/$rid/Overboard" "$app/Contents/MacOS/"
+            cp Overboard.icns "$app/Contents/Resources/"
+            sed "s/@VERSION@/$VERSION/g" build/macos/Info.plist > "$app/Contents/Info.plist"
+            # Not notarized: an ad-hoc signature is the minimum Apple Silicon needs to run it.
+            codesign --force --deep --sign - "$app"
+            arch=${rid#osx-}
+            ditto -c -k --keepParent "$app" "dist/Overboard-$VERSION-macos-$arch.zip"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Overboard ${GITHUB_REF_NAME#v}" \
+            --generate-notes

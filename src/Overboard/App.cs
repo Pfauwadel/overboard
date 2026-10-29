@@ -1,4 +1,5 @@
 using Overboard.Board;
+using Overboard.Distribution;
 using Overboard.Ink;
 using Overboard.Input;
 using Overboard.Overlay;
@@ -6,6 +7,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Themes.Fluent;
+using Avalonia.Threading;
 using SharpHook.Data;
 
 namespace Overboard;
@@ -20,6 +22,7 @@ public sealed class App : Application
     private BoardWindow? _board;
     private TrayIcon? _tray;
     private NativeMenuItem? _toggleItem;
+    private NativeMenuItem? _updateItem;
     private WindowIcon? _idleIcon;
     private WindowIcon? _activeIcon;
 
@@ -46,6 +49,7 @@ public sealed class App : Application
             CreateTray(desktop);
             _overlays.Initialize();
             _input.Start();
+            ScheduleUpdateChecks();
 
             desktop.Exit += (_, _) =>
             {
@@ -70,6 +74,18 @@ public sealed class App : Application
         _toggleItem.Click += (_, _) => _overlays!.Toggle();
         var boardItem = new NativeMenuItem("Tableau blanc");
         boardItem.Click += (_, _) => ShowBoard();
+        var autostartItem = new NativeMenuItem("Lancer au démarrage de la session")
+        {
+            ToggleType = MenuItemToggleType.CheckBox,
+            IsChecked = Autostart.IsEnabled,
+        };
+        autostartItem.Click += (_, _) =>
+        {
+            Autostart.Set(!Autostart.IsEnabled);
+            autostartItem.IsChecked = Autostart.IsEnabled;
+        };
+        var versionItem = new NativeMenuItem($"Overboard {AppInfo.Version} : versions sur GitHub");
+        versionItem.Click += (_, _) => AppInfo.OpenUrl(AppInfo.ReleasesUrl);
         var quitItem = new NativeMenuItem("Quitter Overboard");
         quitItem.Click += (_, _) => desktop.Shutdown();
 
@@ -77,10 +93,34 @@ public sealed class App : Application
         {
             Icon = _idleIcon,
             ToolTipText = "Overboard",
-            Menu = [_toggleItem, boardItem, new NativeMenuItemSeparator(), CreateMouseButtonMenu(), new NativeMenuItemSeparator(), quitItem],
+            Menu =
+            [
+                _toggleItem, boardItem, new NativeMenuItemSeparator(),
+                CreateMouseButtonMenu(), autostartItem, new NativeMenuItemSeparator(),
+                versionItem, quitItem,
+            ],
         };
         _tray.Clicked += (_, _) => _overlays!.Toggle();
         TrayIcon.SetIcons(this, [_tray]);
+    }
+
+    /// <summary>Looks for a newer release shortly after startup, then daily, and offers it at the top of the tray menu.</summary>
+    private void ScheduleUpdateChecks()
+    {
+        DispatcherTimer.RunOnce(CheckForUpdate, TimeSpan.FromSeconds(10));
+        var daily = new DispatcherTimer { Interval = TimeSpan.FromDays(1) };
+        daily.Tick += (_, _) => CheckForUpdate();
+        daily.Start();
+    }
+
+    private async void CheckForUpdate()
+    {
+        if (_updateItem != null || await UpdateChecker.FindNewerReleaseAsync() is not { } release) return;
+        _updateItem = new NativeMenuItem($"Nouvelle version {release.Version} : télécharger");
+        _updateItem.Click += (_, _) => AppInfo.OpenUrl(release.Url);
+        _tray!.Menu!.Items.Insert(0, _updateItem);
+        _tray.Menu.Items.Insert(1, new NativeMenuItemSeparator());
+        _tray.ToolTipText = $"Overboard : version {release.Version} disponible";
     }
 
     /// <summary>Choice of the mouse button that toggles drawing mode, remembered between runs.</summary>

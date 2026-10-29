@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: the release workflow replaces @VERSION@ with the version number. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Overboard</string>
+  <key>CFBundleDisplayName</key><string>Overboard</string>
+  <key>CFBundleIdentifier</key><string>io.github.pfauwadel.overboard</string>
+  <key>CFBundleExecutable</key><string>Overboard</string>
+  <key>CFBundleIconFile</key><string>Overboard</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <!-- Lives in the menu bar: no Dock icon. -->
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>

@@ -14,6 +14,7 @@ public sealed class Toolbar : Border
 {
     private static readonly (Tool Tool, string Tip, string Icon)[] Tools =
     [
+        (Tool.Select, "Sélection (V)", "M6 3 V18 L10 14 L13 20.5 L15.5 19.5 L12.5 13 H18 Z"),
         (Tool.Pen, "Stylo (P)", "M4 20 L5 15 L15 5 L19 9 L9 19 Z M13 7 L17 11"),
         (Tool.Highlighter, "Surligneur (S)", "M14 4 L20 10 L12 18 L6 12 Z M6 12 L4 18 L6 20 L12 18 M3 21 L5 19"),
         (Tool.Eraser, "Gomme (G)", "M8 20 L3 15 L13 5 L20 12 L12 20 Z M12 20 H21 M8 10 L15 17"),

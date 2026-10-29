@@ -3,11 +3,28 @@
 Dessiner n'importe où sur l'écran, et présenter sur un tableau blanc ou noir.
 Windows, macOS et Linux, en .NET 10 et [Avalonia](https://avaloniaui.net/).
 
-## Lancer
+## Installer
+
+Télécharger le fichier de sa plateforme dans les [Releases](https://github.com/Pfauwadel/overboard/releases) :
+un seul exécutable, sans installation ni .NET à installer.
+
+- **Windows** : `Overboard-x.y.z-win-x64.zip` (ou `win-arm64`), extraire `Overboard.exe` où l'on veut et le lancer.
+  L'exécutable n'est pas signé : au premier lancement, SmartScreen demande de confirmer (« Informations complémentaires » → « Exécuter quand même »).
+- **macOS** : `Overboard-x.y.z-macos-arm64.zip` (Apple Silicon) ou `macos-x64` (Intel), glisser `Overboard.app` dans Applications.
+  L'application n'est pas notarisée : la première fois, clic droit → Ouvrir, ou `xattr -dr com.apple.quarantine /Applications/Overboard.app`.
+- **Linux** : `Overboard-x.y.z-linux-x64.tar.gz`, extraire et lancer `./Overboard`.
+
+Dans le menu de l'icône : **Lancer au démarrage de la session**, et la version installée (lien vers les Releases).
+Overboard vérifie chaque jour s'il existe une version plus récente et la propose en haut de ce menu ;
+cette vérification interroge GitHub sans authentification, elle ne voit donc rien tant que le dépôt est privé.
+
+## Lancer depuis les sources
 
 ```sh
 dotnet run --project src/Overboard
 ```
+
+## Utiliser
 
 Overboard démarre dans la zone de notification (barre des tâches).
 Clic sur l'icône : dessiner sur l'écran. Menu de l'icône → **Tableau blanc** : un tableau infini dans une fenêtre.
@@ -20,13 +37,16 @@ dans le menu de l'icône (**Bouton de souris pour dessiner**).
 |---|---|
 | Activer / désactiver le dessin | `Ctrl+Shift+D` ou clic sur l'icône |
 | Quitter le dessin (efface tout) | `Échap` |
+| Sélection | `V` ; clic, `Maj`+clic pour ajouter ou retirer, ou rectangle autour ; glisser pour déplacer |
+| Sélectionner tout, copier, couper, coller, dupliquer | `Ctrl+A`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+D` |
+| Déplacer ou supprimer la sélection | flèches (`Maj` : ×10), `Suppr` |
 | Stylo, surligneur, gomme | `P`, `S`, `G` |
 | Texte | `T`, puis clic ; `Entrée` ou `Échap` pour valider, `Maj+Entrée` pour aller à la ligne |
 | Ligne, flèche, rectangle, ellipse | `L`, `F`, `R`, `E` ; `Maj` pour angles à 45°, carrés et cercles |
 | Couleurs | `1` à `6` |
 | Taille du trait | molette, `+` / `-` |
 | Annuler / rétablir | `Ctrl+Z` / `Ctrl+Y` |
-| Tout effacer | `Suppr` |
+| Tout effacer | `Suppr` (sans sélection) |
 | Pointeur laser (trace qui s'efface) | `K` |
 | Projecteur (assombrit tout sauf autour du curseur ; molette pour la taille) | `O` |
 | Envoyer l'écran annoté au tableau | `Ctrl+B` (en mode dessin) |
@@ -42,13 +62,15 @@ Au stylet, l'épaisseur du trait suit la pression.
 | Zoomer | `Ctrl` + molette (pincer sur un pavé tactile), `Ctrl` + `+` / `-` |
 | Tout voir | `Ctrl+0` |
 | Fond clair ou sombre | `B` (le noir et le blanc s'échangent) |
+| Désélectionner | `Échap` |
 | Grille | `Ctrl+G` |
 | Nouveau, ouvrir, enregistrer, enregistrer sous | `Ctrl+N`, `Ctrl+O`, `Ctrl+S`, `Ctrl+Maj+S` |
 
 Les tailles de trait et de texte sont celles affichées à l'écran : zoomer permet d'écrire plus fin.
 Le tableau est sauvegardé en continu et rouvert tel quel ; `Ctrl+S` l'enregistre en plus dans un fichier `.overboard` (JSON).
 Un écran envoyé au tableau s'ajoute à droite du contenu : la capture en image, les annotations par-dessus, toujours modifiables.
-La gomme n'efface que les annotations, jamais les captures (`Ctrl+Z` retire un envoi entier).
+La gomme n'efface que les annotations, jamais les captures : pour en retirer une, la sélectionner (`V`) puis `Suppr`.
+Copier sur l'écran puis coller sur le tableau fonctionne aussi.
 
 ## Plateformes
 
@@ -63,8 +85,22 @@ L'envoi au tableau n'a été essayé que sous Windows.
 ## Structure
 
 - `Ink/` : moteur de dessin (outils, lissage des traits, contour à épaisseur variable, formes, texte, annuler/rétablir)
-- `Overlay/` : une fenêtre transparente par écran, activation et désactivation
+- `Overlay/` : une fenêtre transparente par écran, activation et désactivation, capture d'écran
 - `Board/` : fenêtre du tableau, fond et grille, format `.overboard`, sauvegarde automatique
 - `Controls/` : barre d'outils et bandeau d'aide, communs aux deux
 - `Input/` : raccourcis clavier globaux via [SharpHook](https://github.com/TolikPylypchuk/SharpHook)
 - `App.cs` : icône et menu de la zone de notification
+- `Distribution/` : version, lancement au démarrage de la session, recherche de nouvelle version
+
+## Publier une version
+
+Pousser un tag de version : le workflow **Release** construit les exécutables des cinq plateformes
+et crée la Release GitHub correspondante, avec les notes générées depuis les commits.
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Pour obtenir les fichiers sans rien publier : Actions → Release → *Run workflow* ; ils sont alors joints à l'exécution.
+En local : `dotnet publish src/Overboard -c Release -r win-x64` (ou `linux-x64`, `osx-arm64`…).

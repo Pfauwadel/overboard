@@ -18,6 +18,9 @@ public abstract class InkElement
 
     /// <summary>The same element, moved by <paramref name="offset"/>.</summary>
     public abstract InkElement Translate(Vector offset);
+
+    /// <summary>Whether the eraser removes the element.</summary>
+    public virtual bool IsErasable => true;
 }
 
 /// <summary>A freehand stroke, filled as an outline. Highlighter strokes are translucent.</summary>
@@ -222,8 +225,10 @@ public sealed class ImageElement : InkElement
             context.DrawImage(Bitmap, Bounds);
     }
 
+    public override bool HitTest(Point point, double radius) => Bounds.Inflate(radius).Contains(point);
+
     /// <summary>The eraser removes what is drawn over a picture, never the picture itself.</summary>
-    public override bool HitTest(Point point, double radius) => false;
+    public override bool IsErasable => false;
 
     public override InkElement Translate(Vector offset) => new ImageElement(Bitmap, Bounds.Translate(offset), _png);
 }

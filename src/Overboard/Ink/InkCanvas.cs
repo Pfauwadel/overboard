@@ -57,6 +57,17 @@ public sealed class InkCanvas : Control
     private List<InkElement>? _beforeErase;
     private InkElement? _preview;
 
+    // Selection, and the selection gesture in progress: a rubber band or a move. Board coordinates.
+    private readonly HashSet<InkElement> _selection = [];
+    private Point _selectFrom;
+    private Rect? _band;
+    private HashSet<InkElement> _bandKeeps = [];
+    private bool _moving;
+    private Vector _moveOffset;
+    private bool _hoverSelectable;
+    // Shared by every canvas: copy on the screen, paste on the board.
+    private static IReadOnlyList<InkElement> _clipboard = [];
+
     private TextBox? _editor;
     private Point _editorPosition;
     private Color _editorColor;
@@ -185,6 +196,7 @@ public sealed class InkCanvas : Control
         if (!_undo.TryPop(out var previous)) return;
         _redo.Push(_elements);
         _elements = previous;
+        _selection.Clear();
         InvalidateVisual();
         Changed?.Invoke();
     }
@@ -195,6 +207,7 @@ public sealed class InkCanvas : Control
         if (!_redo.TryPop(out var next)) return;
         _undo.Push(_elements);
         _elements = next;
+        _selection.Clear();
         InvalidateVisual();
         Changed?.Invoke();
     }
@@ -206,6 +219,7 @@ public sealed class InkCanvas : Control
         if (_elements.Count == 0) return;
         PushUndo();
         _elements.Clear();
+        _selection.Clear();
         InvalidateVisual();
         Changed?.Invoke();
     }
@@ -215,6 +229,8 @@ public sealed class InkCanvas : Control
     {
         CancelText();
         _elements = [];
+        _selection.Clear();
+        _band = null;
         _undo.Clear();
         _redo.Clear();
         _gesture = null;
@@ -303,6 +319,9 @@ public sealed class InkCanvas : Control
                 break;
             case Tool.Spotlight:
                 return;
+            case Tool.Select:
+                StartSelect(position, e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+                break;
             default:
                 _start = position;
                 _gesture = tool;
@@ -312,6 +331,164 @@ public sealed class InkCanvas : Control
         _gesture = tool;
         Focus();
         e.Pointer.Capture(this);
+        InvalidateVisual();
+    }
+
+    public bool HasSelection => _selection.Count > 0;
+
+    /// <summary>The topmost element under <paramref name="point"/>, with a few pixels of tolerance.</summary>
+    private InkElement? ElementAt(Point point)
+    {
+        var radius = 6 / _zoom;
+        for (var i = _elements.Count - 1; i >= 0; i--)
+        {
+            var element = _elements[i];
+            if (element.Bounds.Inflate(radius).Contains(point) && element.HitTest(point, radius)) return element;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Clicking an element selects it (Shift: adds or removes it) and starts moving the selection;
+    /// clicking elsewhere starts a rubber band, which selects the elements it fully encloses.
+    /// </summary>
+    private void StartSelect(Point position, bool adding)
+    {
+        _selectFrom = position;
+        _moveOffset = default;
+        var hit = ElementAt(position);
+        if (hit is null)
+        {
+            _bandKeeps = adding ? [.. _selection] : [];
+            if (!adding) _selection.Clear();
+            _band = new Rect(position, position);
+            return;
+        }
+        if (adding && _selection.Remove(hit)) return;
+        if (!adding && !_selection.Contains(hit)) _selection.Clear();
+        _selection.Add(hit);
+        _moving = true;
+    }
+
+    private void DragSelect(Point position)
+    {
+        if (_band != null)
+        {
+            var band = new Rect(_selectFrom, position);
+            _band = band;
+            _selection.Clear();
+            _selection.UnionWith(_bandKeeps);
+            _selection.UnionWith(_elements.Where(e => band.Contains(e.Bounds)));
+        }
+        else if (_moving)
+        {
+            _moveOffset = position - _selectFrom;
+        }
+    }
+
+    private void EndSelect()
+    {
+        var offset = _moveOffset;
+        _band = null;
+        _moving = false;
+        _moveOffset = default;
+        if (offset != default) MoveSelection(offset);
+    }
+
+    private void UpdateHover(Point position)
+    {
+        var selectable = ElementAt(position) != null;
+        if (selectable == _hoverSelectable) return;
+        _hoverSelectable = selectable;
+        ApplyCursor();
+    }
+
+    /// <summary>Replaces the selected elements by moved copies, in place, as one undoable step.</summary>
+    private void MoveSelection(Vector offset)
+    {
+        PushUndo();
+        var moved = new HashSet<InkElement>();
+        for (var i = 0; i < _elements.Count; i++)
+        {
+            if (!_selection.Contains(_elements[i])) continue;
+            _elements[i] = _elements[i].Translate(offset);
+            moved.Add(_elements[i]);
+        }
+        _selection.Clear();
+        _selection.UnionWith(moved);
+        InvalidateVisual();
+        Changed?.Invoke();
+    }
+
+    /// <summary>Moves the selection by an on-screen distance (arrow keys).</summary>
+    public void Nudge(Vector screenOffset)
+    {
+        if (HasSelection) MoveSelection(screenOffset / _zoom);
+    }
+
+    public void SelectAll()
+    {
+        CommitText();
+        _settings.Tool = Tool.Select;
+        _selection.UnionWith(_elements);
+        InvalidateVisual();
+    }
+
+    public void ClearSelection()
+    {
+        _selection.Clear();
+        InvalidateVisual();
+    }
+
+    public void DeleteSelection()
+    {
+        if (!HasSelection) return;
+        PushUndo();
+        _elements.RemoveAll(_selection.Contains);
+        _selection.Clear();
+        InvalidateVisual();
+        Changed?.Invoke();
+    }
+
+    /// <summary>The selected elements, in drawing order.</summary>
+    private List<InkElement> Selected() => [.. _elements.Where(_selection.Contains)];
+
+    public void Copy()
+    {
+        if (HasSelection) _clipboard = Selected();
+    }
+
+    public void Cut()
+    {
+        Copy();
+        DeleteSelection();
+    }
+
+    /// <summary>Pastes what was copied, centered on the pointer (or the view), and selects it.</summary>
+    public void Paste()
+    {
+        if (_clipboard.Count == 0) return;
+        var copied = _clipboard.Select(e => e.Bounds).Aggregate((a, b) => a.Union(b));
+        var view = new Rect(Bounds.Size);
+        var target = ToBoard(_pointer is { } p && view.Contains(p) ? p : view.Center);
+        Vector offset = target - copied.Center;
+        // Pasting in place would hide the copy behind the original.
+        if (Math.Abs(offset.X) * _zoom < 4 && Math.Abs(offset.Y) * _zoom < 4) offset = new Vector(24, 24) / _zoom;
+        AddSelected([.. _clipboard.Select(e => e.Translate(offset))]);
+    }
+
+    public void Duplicate()
+    {
+        if (HasSelection) AddSelected([.. Selected().Select(e => e.Translate(new Vector(24, 24) / _zoom))]);
+    }
+
+    private void AddSelected(List<InkElement> elements)
+    {
+        CommitText();
+        _settings.Tool = Tool.Select;
+        Add(elements);
+        _selection.Clear();
+        _selection.UnionWith(elements);
         InvalidateVisual();
     }
 
@@ -337,7 +514,11 @@ public sealed class InkCanvas : Control
         switch (_gesture)
         {
             case null:
+                if (_settings.Tool == Tool.Select) UpdateHover(ToBoard(_pointer.Value));
                 return;
+            case Tool.Select:
+                DragSelect(ToBoard(e.GetPosition(this)));
+                break;
             case Tool.Pen or Tool.Highlighter:
                 // Intermediate points: every sample since the last event, not one per frame.
                 foreach (var point in e.GetIntermediatePoints(this))
@@ -374,7 +555,7 @@ public sealed class InkCanvas : Control
         }
         var position = ToBoard(e.GetPosition(this));
         if (_gesture is Tool.Pen or Tool.Highlighter) _stroke?.Finish(position);
-        else if (_gesture is not (null or Tool.Eraser)) _preview = ShapeTo(position, e.KeyModifiers);
+        else if (_gesture is Tool.Line or Tool.Arrow or Tool.Rectangle or Tool.Ellipse) _preview = ShapeTo(position, e.KeyModifiers);
         EndGesture();
     }
 
@@ -429,6 +610,9 @@ public sealed class InkCanvas : Control
             case Tool.Laser:
                 // The trail fades by itself.
                 break;
+            case Tool.Select:
+                EndSelect();
+                break;
             default:
                 if (Distance(_start, _end) * _zoom >= MinShapeLength && _preview != null) Commit(_preview);
                 break;
@@ -462,7 +646,8 @@ public sealed class InkCanvas : Control
         {
             var t = (double)i / steps;
             var point = new Point(from.X + (to.X - from.X) * t, from.Y + (to.Y - from.Y) * t);
-            _elements.RemoveAll(element => element.Bounds.Inflate(radius).Contains(point) && element.HitTest(point, radius));
+            _elements.RemoveAll(element =>
+                element.IsErasable && element.Bounds.Inflate(radius).Contains(point) && element.HitTest(point, radius));
         }
     }
 
@@ -566,12 +751,31 @@ public sealed class InkCanvas : Control
         using (context.PushTransform(Matrix.CreateScale(_zoom, _zoom) * Matrix.CreateTranslation(_offset)))
         {
             foreach (var element in _elements)
-                if (element.Bounds.Intersects(visible))
+            {
+                // The selection being moved is drawn at its new place.
+                var offset = _moveOffset != default && _selection.Contains(element) ? _moveOffset : default;
+                if (!element.Bounds.Translate(offset).Intersects(visible)) continue;
+                using (context.PushTransform(Matrix.CreateTranslation(offset)))
                     element.Render(context, _darkBackground);
+            }
             _preview?.Render(context, _darkBackground);
             RenderLaser(context);
+            RenderSelection(context);
         }
         if (_settings.Tool == Tool.Spotlight) RenderSpotlight(context);
+    }
+
+    /// <summary>A dashed frame around each selected element, and the rubber band.</summary>
+    private void RenderSelection(DrawingContext context)
+    {
+        if (_selection.Count == 0 && _band is null) return;
+        var accent = Color.Parse(_darkBackground ? "#60a5fa" : "#2563eb");
+        var frame = new ImmutablePen(new ImmutableSolidColorBrush(accent), 1.25 / _zoom, new ImmutableDashStyle([4, 3], 0));
+        var padding = 4 / _zoom;
+        foreach (var element in _selection)
+            context.DrawRectangle(null, frame, element.Bounds.Translate(_moveOffset).Inflate(padding));
+        if (_band is { } band)
+            context.DrawRectangle(new ImmutableSolidColorBrush(accent, 0.08), new ImmutablePen(new ImmutableSolidColorBrush(accent, 0.7), 1 / _zoom), band);
     }
 
     /// <summary>A red glow with a bright core, thinning and fading along the trail.</summary>
@@ -639,17 +843,25 @@ public sealed class InkCanvas : Control
             Tool.Eraser => BrushCursor.CreateEraser(_settings.EraserSize, scaling),
             Tool.Text => new Cursor(StandardCursorType.Ibeam),
             Tool.Laser => BrushCursor.Create(LaserColor, 12, scaling),
+            Tool.Select => new Cursor(StandardCursorType.Arrow),
             // The bright circle is the cursor.
             Tool.Spotlight => new Cursor(StandardCursorType.None),
             _ => new Cursor(StandardCursorType.Cross),
         };
+        // The selection only shows, and only applies, with the selection tool.
+        if (_settings.Tool != Tool.Select)
+        {
+            _selection.Clear();
+            _hoverSelectable = false;
+        }
         ApplyCursor();
         previous?.Dispose();
         // The spotlight appears, disappears or resizes with the tool settings.
         InvalidateVisual();
     }
 
-    private void ApplyCursor() => Cursor = _panFrom != null || _panKeyHeld ? _panCursor : _cursor;
+    private void ApplyCursor() =>
+        Cursor = _panFrom != null || _panKeyHeld || (_hoverSelectable && _settings.Tool == Tool.Select) ? _panCursor : _cursor;
 
     private readonly record struct LaserPoint(Point Position, long Time);
 }

@@ -321,6 +321,7 @@ public sealed class BoardWindow : Window
         else if (command && e.Key is Key.Add or Key.OemPlus) _canvas.ZoomBy(1.25);
         else if (command && e.Key is Key.Subtract or Key.OemMinus) _canvas.ZoomBy(0.8);
         else if (!command && e.Key == Key.B) ToggleDark();
+        else if (e.Key == Key.Escape) _canvas.ClearSelection();
         else if (!InkShortcuts.Handle(e, _settings, _canvas))
         {
             base.OnKeyDown(e);

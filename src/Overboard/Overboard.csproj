@@ -6,7 +6,30 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Overboard</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\overboard.ico</ApplicationIcon>
+    <!-- Overridden by the release workflow from the tag (v1.2.3 → 1.2.3). -->
+    <Version>0.1.0</Version>
+    <Product>Overboard</Product>
+    <Description>Dessiner n'importe où sur l'écran, et présenter sur un tableau blanc ou noir.</Description>
+    <Copyright>Pfauwadel</Copyright>
   </PropertyGroup>
+
+  <!-- dotnet publish -r <rid>: one self-contained executable, no .NET install needed. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <!-- SkiaSharp and HarfBuzz ship debug symbols for their native libraries: not for distribution. -->
+  <Target Name="SkipNativeSymbols" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />

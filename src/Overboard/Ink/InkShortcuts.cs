@@ -1,8 +1,9 @@
+using Avalonia;
 using Avalonia.Input;
 
 namespace Overboard.Ink;
 
-/// <summary>Keyboard shortcuts shared by every drawing window: tools, colors, size, undo and clear.</summary>
+/// <summary>Keyboard shortcuts shared by every drawing window: tools, colors, size, undo, selection and clear.</summary>
 public static class InkShortcuts
 {
     /// <summary>Ctrl, or Cmd on macOS.</summary>
@@ -38,6 +39,17 @@ public static class InkShortcuts
             Key.E => Tool.Ellipse,
             Key.K => Tool.Laser,
             Key.O => Tool.Spotlight,
+            Key.V => Tool.Select,
+            _ => null,
+        };
+        // Arrow keys move the selection: one pixel, ten with Shift.
+        var step = shift ? 10 : 1;
+        Vector? nudge = e.Key switch
+        {
+            Key.Left => new Vector(-step, 0),
+            Key.Right => new Vector(step, 0),
+            Key.Up => new Vector(0, -step),
+            Key.Down => new Vector(0, step),
             _ => null,
         };
 
@@ -45,7 +57,18 @@ public static class InkShortcuts
         else if (digit > 0 && !command) settings.Color = ToolSettings.Palette[digit - 1];
         else if (command && e.Key == Key.Z && !shift) canvas.Undo();
         else if (command && (e.Key == Key.Y || (e.Key == Key.Z && shift))) canvas.Redo();
-        else if (e.Key is Key.Delete or Key.Back) canvas.Clear();
+        else if (command && e.Key == Key.A) canvas.SelectAll();
+        else if (command && e.Key == Key.C) canvas.Copy();
+        else if (command && e.Key == Key.X) canvas.Cut();
+        else if (command && e.Key == Key.V) canvas.Paste();
+        else if (command && e.Key == Key.D) canvas.Duplicate();
+        else if (nudge is { } offset && canvas.HasSelection) canvas.Nudge(offset);
+        // Delete removes the selection if there is one, otherwise everything.
+        else if (e.Key is Key.Delete or Key.Back)
+        {
+            if (canvas.HasSelection) canvas.DeleteSelection();
+            else canvas.Clear();
+        }
         else if (e.Key is Key.Add or Key.OemPlus) settings.Grow(1);
         else if (e.Key is Key.Subtract or Key.OemMinus) settings.Grow(-1);
         else return false;

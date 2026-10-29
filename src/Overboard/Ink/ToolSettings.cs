@@ -14,6 +14,7 @@ public enum Tool
     Text,
     Laser,
     Spotlight,
+    Select,
 }
 
 /// <summary>Current tool, color and size, shared by every overlay.</summary>
