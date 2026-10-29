@@ -76,6 +76,7 @@ Au stylet, l'épaisseur du trait suit la pression.
 | Tout voir | `Ctrl+0` |
 | Fond clair ou sombre | `B` (le noir et le blanc s'échangent) |
 | Désélectionner | `Échap` |
+| Exporter en PNG (la sélection, sinon tout le tableau) | `Ctrl+E` |
 | Grille | `Ctrl+G` |
 | Nouveau, ouvrir, enregistrer, enregistrer sous | `Ctrl+N`, `Ctrl+O`, `Ctrl+S`, `Ctrl+Maj+S` |
 
@@ -84,6 +85,10 @@ Le tableau est sauvegardé en continu et rouvert tel quel ; `Ctrl+S` l'enregistr
 Un écran envoyé au tableau s'ajoute à droite du contenu : la capture en image, les annotations par-dessus, toujours modifiables.
 La gomme n'efface que les annotations, jamais les captures : pour en retirer une, la sélectionner (`V`) puis `Suppr`.
 Copier sur l'écran puis coller sur le tableau fonctionne aussi.
+
+`Ctrl+C` place aussi la sélection en image dans le presse-papiers du système, à coller dans un document ou un message
+(tant qu'Overboard tourne). `Ctrl+V` colle une image ou des fichiers image copiés ailleurs, et on peut glisser-déposer
+des images sur le tableau. L'export PNG reprend le fond du tableau, en double résolution.
 
 ## Plateformes
 

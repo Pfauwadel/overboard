@@ -4,6 +4,7 @@ using Overboard.Overlay;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -21,6 +22,7 @@ public sealed class BoardWindow : Window
 
     private static readonly TimeSpan AutosaveDelay = TimeSpan.FromSeconds(1);
     private static readonly FilePickerFileType FileType = new("Tableau Overboard") { Patterns = ["*" + BoardFile.Extension] };
+    private static readonly FilePickerFileType PngType = new("Image PNG") { Patterns = ["*.png"] };
 
     private readonly ToolSettings _settings;
     private readonly string _autosavePath;
@@ -61,6 +63,7 @@ public sealed class BoardWindow : Window
             Toolbar.Button("M3 6 H9 L11 8 H21 V19 H3 Z", "Ouvrir (Ctrl+O)", () => _ = OpenAsync()),
             Toolbar.Button("M5 4 H16 L20 8 V20 H5 Z M8 4 V9 H15 V4 M8 20 V14 H16 V20", "Enregistrer (Ctrl+S)", () => _ = SaveAsync(saveAs: false)),
             Toolbar.Button("M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15", "Tout voir (Ctrl+0)", _canvas.FitContent),
+            Toolbar.Button("M4 5 H20 V19 H4 Z M4 16 L9 11 L13 15 L16 12 L20 16", "Exporter en PNG (Ctrl+E)", () => _ = ExportAsync()),
             Toolbar.Button("M20 14 A8 8 0 1 1 10 4 A6 6 0 0 0 20 14 Z", "Fond clair ou sombre (B)", ToggleDark),
             _gridButton);
 
@@ -122,6 +125,7 @@ public sealed class BoardWindow : Window
     private void SetDark(bool dark)
     {
         _canvas.DarkBackground = dark;
+        _canvas.Paper = BoardBackground.Paper(dark);
         _background.Dark = dark;
         _toolbar.DarkBackground = dark;
         RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light;
@@ -278,6 +282,40 @@ public sealed class BoardWindow : Window
             _hud.ShowMessage("Capture d'écran indisponible : seules les annotations ont été envoyées");
     }
 
+    /// <summary>Saves the selection, or the whole board, as a PNG picture with the board's background.</summary>
+    private async Task ExportAsync()
+    {
+        _canvas.CommitText();
+        if (_canvas.RenderPicture() is not { } picture)
+        {
+            _hud.ShowMessage("Rien à exporter : le tableau est vide");
+            return;
+        }
+        using (picture)
+        {
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = _canvas.HasSelection ? "Exporter la sélection" : "Exporter le tableau",
+                SuggestedFileName = BoardName,
+                DefaultExtension = ".png",
+                FileTypeChoices = [PngType],
+                ShowOverwritePrompt = true,
+            });
+            if (file is null) return;
+            try
+            {
+                await using var stream = await file.OpenWriteAsync();
+                picture.Save(stream, PngBitmapEncoderOptions.Default);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                _hud.ShowMessage($"Impossible d'exporter : {e.Message}");
+                return;
+            }
+            _hud.ShowMessage($"Exporté : {file.Name}");
+        }
+    }
+
     private async Task NewAsync()
     {
         if (!await ConfirmReplaceAsync()) return;
@@ -315,7 +353,8 @@ public sealed class BoardWindow : Window
         if (e.Key == Key.Space) _canvas.PanKeyHeld = true;
         else if (command && e.Key == Key.S) _ = SaveAsync(saveAs: shift);
         else if (command && e.Key == Key.O) _ = OpenAsync();
-        else if (command && e.Key == Key.N) _ = NewAsync();
+        else if (command && e.Key == Key.G) ToggleGrid();
+        else if (command && e.Key == Key.E) _ = ExportAsync();
         else if (command && e.Key == Key.G) ToggleGrid();
         else if (command && e.PhysicalKey is PhysicalKey.Digit0 or PhysicalKey.NumPad0) _canvas.FitContent();
         else if (command && e.Key is Key.Add or Key.OemPlus) _canvas.ZoomBy(1.25);

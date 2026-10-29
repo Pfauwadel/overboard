@@ -28,6 +28,8 @@ public sealed class BoardBackground : Control
         canvas.ViewChanged += InvalidateVisual;
     }
 
+    public static IBrush Paper(bool dark) => dark ? DarkPaper : LightPaper;
+
     public bool Dark
     {
         get => _dark;

@@ -2,8 +2,10 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Media.Immutable;
 using Avalonia.VisualTree;
 
@@ -67,6 +69,8 @@ public sealed class InkCanvas : Control
     private bool _hoverSelectable;
     // Shared by every canvas: copy on the screen, paste on the board.
     private static IReadOnlyList<InkElement> _clipboard = [];
+    // What Copy last put on the system clipboard: while it is still there, pasting uses _clipboard.
+    private static IAsyncDataTransfer? _systemClipboard;
 
     private TextBox? _editor;
     private Point _editorPosition;
@@ -80,7 +84,13 @@ public sealed class InkCanvas : Control
         _settings = settings;
         Focusable = true;
         ClipToBounds = true;
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
     }
+
+    /// <summary>The background of pictures made from the canvas (export, copy); transparent if null.</summary>
+    public IBrush? Paper { get; set; }
 
     /// <summary>Whether the view can be moved (Space or middle/right button drag) and zoomed (Ctrl+wheel).</summary>
     public bool CanNavigate { get; init; }
@@ -453,9 +463,36 @@ public sealed class InkCanvas : Control
     /// <summary>The selected elements, in drawing order.</summary>
     private List<InkElement> Selected() => [.. _elements.Where(_selection.Contains)];
 
+    /// <summary>The selection if there is one, otherwise every element.</summary>
+    public IReadOnlyList<InkElement> SelectedOrAll() => HasSelection ? Selected() : _elements;
+
+    /// <summary>The selection (or everything) as a picture, as it looks on this canvas.</summary>
+    public RenderTargetBitmap? RenderPicture()
+    {
+        var elements = SelectedOrAll();
+        return elements.Count == 0 ? null : InkPicture.Render(elements, Paper, _darkBackground);
+    }
+
+    /// <summary>
+    /// Copies the selection for pasting in Overboard, and as a picture on the system clipboard
+    /// for pasting in other applications.
+    /// </summary>
     public void Copy()
     {
-        if (HasSelection) _clipboard = Selected();
+        if (!HasSelection) return;
+        _clipboard = Selected();
+        _ = PutOnSystemClipboardAsync(InkPicture.Render(_clipboard, Paper, _darkBackground));
+    }
+
+    private async Task PutOnSystemClipboardAsync(Bitmap picture)
+    {
+        if (TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard) return;
+        var item = new DataTransferItem();
+        item.SetBitmap(picture);
+        var data = new DataTransfer();
+        data.Add(item);
+        _systemClipboard = data;
+        await clipboard.SetDataAsync(data);
     }
 
     public void Cut()
@@ -464,17 +501,82 @@ public sealed class InkCanvas : Control
         DeleteSelection();
     }
 
-    /// <summary>Pastes what was copied, centered on the pointer (or the view), and selects it.</summary>
-    public void Paste()
+    /// <summary>
+    /// Pastes, centered on the pointer (or the view), and selects what was pasted: the elements copied
+    /// in Overboard if they are still what the system clipboard holds, otherwise a picture or picture files.
+    /// </summary>
+    public async void Paste()
+    {
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        var ownCopy = _systemClipboard != null && clipboard != null && await clipboard.TryGetInProcessDataAsync() == _systemClipboard;
+        if (clipboard != null && !ownCopy)
+        {
+            if (await clipboard.TryGetBitmapAsync() is { } picture)
+            {
+                AddPictures([picture], PasteTarget());
+                return;
+            }
+            if (await clipboard.TryGetFilesAsync() is { } files && InkPicture.Load(files) is { Count: > 0 } pictures)
+            {
+                AddPictures(pictures, PasteTarget());
+                return;
+            }
+        }
+        PasteElements();
+    }
+
+    /// <summary>Where pasted things go, in control coordinates: the pointer if it is over the canvas, else the middle.</summary>
+    private Point PasteTarget()
+    {
+        var view = new Rect(Bounds.Size);
+        return _pointer is { } p && view.Contains(p) ? p : view.Center;
+    }
+
+    private void PasteElements()
     {
         if (_clipboard.Count == 0) return;
         var copied = _clipboard.Select(e => e.Bounds).Aggregate((a, b) => a.Union(b));
-        var view = new Rect(Bounds.Size);
-        var target = ToBoard(_pointer is { } p && view.Contains(p) ? p : view.Center);
-        Vector offset = target - copied.Center;
+        Vector offset = ToBoard(PasteTarget()) - copied.Center;
         // Pasting in place would hide the copy behind the original.
         if (Math.Abs(offset.X) * _zoom < 4 && Math.Abs(offset.Y) * _zoom < 4) offset = new Vector(24, 24) / _zoom;
         AddSelected([.. _clipboard.Select(e => e.Translate(offset))]);
+    }
+
+    /// <summary>
+    /// Adds pictures side by side, centered on <paramref name="target"/> (control coordinates), at their
+    /// on-screen pixel size, shrunk if needed to fit most of the view.
+    /// </summary>
+    private void AddPictures(IReadOnlyList<Bitmap> pictures, Point target)
+    {
+        const double gap = 16;
+        var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
+        var sizes = pictures.Select(p => p.PixelSize.ToSize(scaling)).ToList();
+        var width = sizes.Sum(s => s.Width) + gap * (sizes.Count - 1);
+        var height = sizes.Max(s => s.Height);
+        var fit = Math.Min(1, Math.Min(Bounds.Width * 0.8 / width, Bounds.Height * 0.8 / height));
+        // Sizes on screen, then in board units.
+        var x = target.X - width * fit / 2;
+        var added = new List<InkElement>();
+        for (var i = 0; i < pictures.Count; i++)
+        {
+            var size = sizes[i] * fit;
+            var topLeft = ToBoard(new Point(x, target.Y - size.Height / 2));
+            added.Add(new ImageElement(pictures[i], new Rect(topLeft, size / _zoom)));
+            x += size.Width + gap * fit;
+        }
+        AddSelected(added);
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = e.DataTransfer.TryGetFiles()?.Any(InkPicture.IsPicture) == true ? DragDropEffects.Copy : DragDropEffects.None;
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        if (e.DataTransfer.TryGetFiles() is not { } files || InkPicture.Load(files) is not { Count: > 0 } pictures) return;
+        AddPictures(pictures, e.GetPosition(this));
+        e.Handled = true;
     }
 
     public void Duplicate()
