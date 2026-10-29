@@ -17,15 +17,23 @@ public enum Tool
 /// <summary>Current tool, color and size, shared by every overlay.</summary>
 public sealed class ToolSettings
 {
+    /// <summary>The palette's black.</summary>
+    public static readonly Color Ink = Color.Parse("#1e1e1e");
+    private static readonly Color Paper = Color.Parse("#ffffff");
+
     public static readonly Color[] Palette =
     [
         Color.Parse("#e03131"),
         Color.Parse("#1971c2"),
         Color.Parse("#2f9e44"),
         Color.Parse("#f5b700"),
-        Color.Parse("#1e1e1e"),
-        Color.Parse("#ffffff"),
+        Ink,
+        Paper,
     ];
+
+    /// <summary>The color actually painted: black and white swap on a dark board, so writing stays readable.</summary>
+    public static Color Display(Color color, bool darkBackground) =>
+        !darkBackground ? color : color == Ink ? Paper : color == Paper ? Ink : color;
 
     public const double MinSize = 1;
     public const double MaxSize = 80;

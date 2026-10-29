@@ -10,6 +10,7 @@ dotnet run --project src/Overboard
 ```
 
 Overboard démarre dans la zone de notification (barre des tâches).
+Clic sur l'icône : dessiner sur l'écran. Menu de l'icône → **Tableau blanc** : un tableau infini dans une fenêtre.
 
 ## Raccourcis
 
@@ -28,6 +29,20 @@ Overboard démarre dans la zone de notification (barre des tâches).
 Tout est aussi accessible depuis la barre d'outils, déplaçable en la faisant glisser.
 Au stylet, l'épaisseur du trait suit la pression.
 
+### Tableau blanc
+
+| Action | Raccourci |
+|---|---|
+| Se déplacer | `Espace` + glisser, ou glisser avec le bouton du milieu ou le bouton droit |
+| Zoomer | `Ctrl` + molette (pincer sur un pavé tactile), `Ctrl` + `+` / `-` |
+| Tout voir | `Ctrl+0` |
+| Fond clair ou sombre | `B` (le noir et le blanc s'échangent) |
+| Grille | `Ctrl+G` |
+| Nouveau, ouvrir, enregistrer, enregistrer sous | `Ctrl+N`, `Ctrl+O`, `Ctrl+S`, `Ctrl+Maj+S` |
+
+Les tailles de trait et de texte sont celles affichées à l'écran : zoomer permet d'écrire plus fin.
+Le tableau est sauvegardé en continu et rouvert tel quel ; `Ctrl+S` l'enregistre en plus dans un fichier `.overboard` (JSON).
+
 ## Plateformes
 
 - **Windows** : complet.
@@ -37,6 +52,8 @@ Au stylet, l'épaisseur du trait suit la pression.
 ## Structure
 
 - `Ink/` : moteur de dessin (outils, lissage des traits, contour à épaisseur variable, formes, texte, annuler/rétablir)
-- `Overlay/` : une fenêtre transparente par écran, barre d'outils, activation et désactivation
+- `Overlay/` : une fenêtre transparente par écran, activation et désactivation
+- `Board/` : fenêtre du tableau, fond et grille, format `.overboard`, sauvegarde automatique
+- `Controls/` : barre d'outils et bandeau d'aide, communs aux deux
 - `Input/` : raccourcis clavier globaux via [SharpHook](https://github.com/TolikPylypchuk/SharpHook)
 - `App.cs` : icône et menu de la zone de notification

@@ -7,7 +7,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 
-namespace Overboard.Overlay;
+namespace Overboard.Controls;
 
 /// <summary>Floating tool palette, dragged by its background.</summary>
 public sealed class Toolbar : Border
@@ -26,12 +26,14 @@ public sealed class Toolbar : Border
 
     private readonly ToolSettings _settings;
     private readonly Dictionary<Tool, ToolbarButton> _toolButtons = [];
-    private readonly List<(Color Color, ToolbarButton Button)> _swatches = [];
+    private readonly List<(Color Color, ToolbarButton Button, Ellipse Swatch)> _swatches = [];
     private readonly TextBlock _sizeLabel;
+    private readonly StackPanel _sections;
     private readonly TranslateTransform _offset = new();
     private Point? _dragOrigin;
 
-    public Toolbar(ToolSettings settings)
+    /// <param name="closeTip">Tooltip of the close button, or null for no close button.</param>
+    public Toolbar(ToolSettings settings, string? closeTip = null)
     {
         _settings = settings;
 
@@ -58,7 +60,7 @@ public sealed class Toolbar : Border
             };
             var button = new ToolbarButton(swatch, $"Couleur ({i + 1})");
             button.Click += () => _settings.Color = color;
-            _swatches.Add((color, button));
+            _swatches.Add((color, button, swatch));
             colors.Children.Add(button);
         }
 
@@ -85,11 +87,11 @@ public sealed class Toolbar : Border
         redo.Click += () => RedoRequested?.Invoke();
         var clear = new ToolbarButton(Icon("M4 7 H20 M10 11 V17 M14 11 V17 M6 7 L7 20 H17 L18 7 M9 7 V4 H15 V7"), "Tout effacer (Suppr)");
         clear.Click += () => ClearRequested?.Invoke();
-        var close = new ToolbarButton(Icon("M6 6 L18 18 M18 6 L6 18"), "Quitter le dessin (Échap)");
-        close.Click += () => CloseRequested?.Invoke();
-        var actions = new UniformGrid { Columns = 2, Children = { undo, redo, clear, close } };
+        var actions = new UniformGrid { Columns = 2, Children = { undo, redo, clear } };
+        if (closeTip != null) actions.Children.Add(Button("M6 6 L18 18 M18 6 L6 18", closeTip, () => CloseRequested?.Invoke()));
 
-        Child = new StackPanel { Children = { tools, Separator(), colors, Separator(), size, Separator(), actions } };
+        _sections = new StackPanel { Children = { tools, Separator(), colors, Separator(), size, Separator(), actions } };
+        Child = _sections;
         Background = new SolidColorBrush(Color.FromArgb(240, 24, 24, 27));
         BorderBrush = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
         BorderThickness = new Thickness(1);
@@ -125,7 +127,7 @@ public sealed class Toolbar : Border
     private void Update()
     {
         foreach (var (tool, button) in _toolButtons) button.IsSelected = tool == _settings.Tool;
-        foreach (var (color, button) in _swatches) button.IsSelected = color == _settings.Color;
+        foreach (var (color, button, _) in _swatches) button.IsSelected = color == _settings.Color;
         _sizeLabel.Text = _settings.Size.ToString("0");
     }
 
@@ -158,6 +160,32 @@ public sealed class Toolbar : Border
     {
         _settings.Grow(Math.Sign(e.Delta.Y));
         e.Handled = true;
+    }
+
+    /// <summary>Shows the swatches in the colors painted on a dark or light board.</summary>
+    public bool DarkBackground
+    {
+        set
+        {
+            foreach (var (color, _, swatch) in _swatches) swatch.Fill = new SolidColorBrush(ToolSettings.Display(color, value));
+        }
+    }
+
+    /// <summary>Appends a group of buttons, two per row.</summary>
+    public void AddSection(params ToolbarButton[] buttons)
+    {
+        var grid = new UniformGrid { Columns = 2 };
+        grid.Children.AddRange(buttons);
+        _sections.Children.Add(Separator());
+        _sections.Children.Add(grid);
+    }
+
+    /// <summary>A button with a line icon (path data on a 24×24 grid).</summary>
+    public static ToolbarButton Button(string icon, string tip, Action click)
+    {
+        var button = new ToolbarButton(Icon(icon), tip);
+        button.Click += click;
+        return button;
     }
 
     /// <summary>A line icon drawn on a 24×24 grid.</summary>

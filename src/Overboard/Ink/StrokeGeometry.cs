@@ -59,7 +59,8 @@ public static class StrokeGeometry
     private static double Radius(Stroke stroke, double pressure)
     {
         var factor = stroke.UsesPressure ? Math.Clamp(0.25 + 1.5 * pressure, 0.25, 1.75) : 1;
-        return Math.Max(stroke.Size * factor / 2, 0.5);
+        // Never thinner than half a unit, unless the stroke itself is that thin (drawn zoomed in).
+        return Math.Max(stroke.Size * factor / 2, Math.Min(0.5, stroke.Size / 2));
     }
 
     private static Geometry Dot(InkPoint p, double r) => new EllipseGeometry(new Rect(p.X - r, p.Y - r, r * 2, r * 2));

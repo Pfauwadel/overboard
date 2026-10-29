@@ -1,3 +1,4 @@
+using Overboard.Board;
 using Overboard.Ink;
 using Overboard.Input;
 using Overboard.Overlay;
@@ -8,11 +9,13 @@ using Avalonia.Themes.Fluent;
 
 namespace Overboard;
 
-/// <summary>Lives in the tray: no main window, overlays are shown on demand.</summary>
+/// <summary>Lives in the tray: overlays and the board window are shown on demand.</summary>
 public sealed class App : Application
 {
     private readonly GlobalInput _input = new();
+    private readonly ToolSettings _settings = new();
     private OverlayManager? _overlays;
+    private BoardWindow? _board;
     private TrayIcon? _tray;
     private NativeMenuItem? _toggleItem;
     private WindowIcon? _idleIcon;
@@ -26,7 +29,7 @@ public sealed class App : Application
         {
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
-            _overlays = new OverlayManager(new ToolSettings(), () => _input.CursorPosition);
+            _overlays = new OverlayManager(_settings, () => _input.CursorPosition);
             _overlays.ActiveChanged += OnActiveChanged;
             _input.TogglePressed += _overlays.Toggle;
             _input.EscapePressed += _overlays.HandleEscape;
@@ -38,6 +41,7 @@ public sealed class App : Application
 
             desktop.Exit += (_, _) =>
             {
+                _board?.SaveSession();
                 _input.Dispose();
                 _overlays.Shutdown();
                 _tray?.Dispose();
@@ -56,6 +60,8 @@ public sealed class App : Application
             ToggleType = MenuItemToggleType.CheckBox,
         };
         _toggleItem.Click += (_, _) => _overlays!.Toggle();
+        var boardItem = new NativeMenuItem("Tableau blanc");
+        boardItem.Click += (_, _) => ShowBoard();
         var quitItem = new NativeMenuItem("Quitter Overboard");
         quitItem.Click += (_, _) => desktop.Shutdown();
 
@@ -63,10 +69,23 @@ public sealed class App : Application
         {
             Icon = _idleIcon,
             ToolTipText = "Overboard",
-            Menu = [_toggleItem, new NativeMenuItemSeparator(), quitItem],
+            Menu = [_toggleItem, boardItem, new NativeMenuItemSeparator(), quitItem],
         };
         _tray.Clicked += (_, _) => _overlays!.Toggle();
         TrayIcon.SetIcons(this, [_tray]);
+    }
+
+    private void ShowBoard()
+    {
+        if (_board is null)
+        {
+            _board = new BoardWindow(_settings, BoardWindow.DefaultAutosavePath);
+            _board.Closed += (_, _) => _board = null;
+            _board.Show();
+            return;
+        }
+        if (_board.WindowState == WindowState.Minimized) _board.WindowState = WindowState.Maximized;
+        _board.Activate();
     }
 
     private void OnActiveChanged()

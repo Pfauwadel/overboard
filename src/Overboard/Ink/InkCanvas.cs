@@ -8,17 +8,32 @@ using Avalonia.VisualTree;
 
 namespace Overboard.Ink;
 
-/// <summary>A drawing surface: pointer input for every tool, rendering, undo and redo.</summary>
+/// <summary>
+/// A drawing surface: pointer input for every tool, rendering, undo and redo.
+/// Elements live in board coordinates; the view (offset and zoom) maps them to
+/// the control, and can be moved and zoomed when <see cref="CanNavigate"/> is set.
+/// Sizes chosen in the tool settings are on-screen sizes, whatever the zoom.
+/// </summary>
 public sealed class InkCanvas : Control
 {
+    public const double MinZoom = 0.1;
+    public const double MaxZoom = 10;
     private const double HighlighterOpacity = 0.4;
     private const double MinShapeLength = 3;
+    private const double StrokePrecision = 0.4;
 
     private readonly ToolSettings _settings;
     // Snapshots of the element list: elements are immutable, so copying references is enough.
     private readonly Stack<List<InkElement>> _undo = new();
     private readonly Stack<List<InkElement>> _redo = new();
     private List<InkElement> _elements = [];
+
+    // Board point shown at the top-left corner, scaled: screen = board × zoom + offset.
+    private Vector _offset;
+    private double _zoom = 1;
+    private Point? _panFrom;
+    private bool _panKeyHeld;
+    private bool _darkBackground;
 
     // Gesture in progress: the tool it started with, even if the tool changes meanwhile.
     private Tool? _gesture;
@@ -35,6 +50,7 @@ public sealed class InkCanvas : Control
     private Color _editorColor;
     private double _editorFontSize;
     private Cursor? _cursor;
+    private readonly Cursor _panCursor = new(StandardCursorType.SizeAll);
 
     public InkCanvas(ToolSettings settings)
     {
@@ -43,7 +59,84 @@ public sealed class InkCanvas : Control
         ClipToBounds = true;
     }
 
+    /// <summary>Whether the view can be moved (Space or middle/right button drag) and zoomed (Ctrl+wheel).</summary>
+    public bool CanNavigate { get; init; }
+
     public bool IsEditingText => _editor != null;
+    public IReadOnlyList<InkElement> Elements => _elements;
+    public Vector Offset => _offset;
+    public double Zoom => _zoom;
+
+    /// <summary>Raised when the user changes the elements: drawing, erasing, undo, redo or clearing.</summary>
+    public event Action? Changed;
+
+    /// <summary>Raised when the view moves or zooms.</summary>
+    public event Action? ViewChanged;
+
+    public bool DarkBackground
+    {
+        get => _darkBackground;
+        set
+        {
+            if (_darkBackground == value) return;
+            _darkBackground = value;
+            InvalidateVisual();
+            UpdateCursor();
+        }
+    }
+
+    /// <summary>While held, the left button moves the view instead of drawing.</summary>
+    public bool PanKeyHeld
+    {
+        get => _panKeyHeld;
+        set
+        {
+            if (!CanNavigate || _panKeyHeld == value) return;
+            _panKeyHeld = value;
+            ApplyCursor();
+        }
+    }
+
+    public Point ToBoard(Point point) => new((point.X - _offset.X) / _zoom, (point.Y - _offset.Y) / _zoom);
+
+    public void SetView(Vector offset, double zoom)
+    {
+        CommitText();
+        zoom = Math.Clamp(zoom, MinZoom, MaxZoom);
+        if (offset == _offset && zoom == _zoom) return;
+        _offset = offset;
+        _zoom = zoom;
+        ViewChanged?.Invoke();
+        InvalidateVisual();
+    }
+
+    /// <summary>Zooms by <paramref name="factor"/>, keeping the board point under <paramref name="anchor"/> in place.</summary>
+    public void ZoomAt(Point anchor, double factor)
+    {
+        var board = ToBoard(anchor);
+        var zoom = Math.Clamp(_zoom * factor, MinZoom, MaxZoom);
+        SetView(new Vector(anchor.X - board.X * zoom, anchor.Y - board.Y * zoom), zoom);
+    }
+
+    public void ZoomBy(double factor) => ZoomAt(new Rect(Bounds.Size).Center, factor);
+
+    /// <summary>Shows every element, without enlarging beyond 100 %.</summary>
+    public void FitContent()
+    {
+        if (_elements.Count == 0)
+        {
+            SetView(default, 1);
+            return;
+        }
+        const double margin = 48;
+        var content = _elements.Select(e => e.Bounds).Aggregate((a, b) => a.Union(b));
+        var size = Bounds.Size;
+        var zoom = Math.Min(1, Math.Min(
+            Math.Max(size.Width - 2 * margin, 1) / Math.Max(content.Width, 1),
+            Math.Max(size.Height - 2 * margin, 1) / Math.Max(content.Height, 1)));
+        zoom = Math.Clamp(zoom, MinZoom, MaxZoom);
+        SetView(new Vector(size.Width / 2 - content.Center.X * zoom, size.Height / 2 - content.Center.Y * zoom), zoom);
+    }
 
     public void Undo()
     {
@@ -52,6 +145,7 @@ public sealed class InkCanvas : Control
         _redo.Push(_elements);
         _elements = previous;
         InvalidateVisual();
+        Changed?.Invoke();
     }
 
     public void Redo()
@@ -61,6 +155,7 @@ public sealed class InkCanvas : Control
         _undo.Push(_elements);
         _elements = next;
         InvalidateVisual();
+        Changed?.Invoke();
     }
 
     /// <summary>Erases everything, as one undoable step.</summary>
@@ -71,6 +166,7 @@ public sealed class InkCanvas : Control
         PushUndo();
         _elements.Clear();
         InvalidateVisual();
+        Changed?.Invoke();
     }
 
     /// <summary>Erases everything, history included.</summary>
@@ -87,6 +183,13 @@ public sealed class InkCanvas : Control
         InvalidateVisual();
     }
 
+    /// <summary>Replaces every element, history included.</summary>
+    public void Load(IEnumerable<InkElement> elements)
+    {
+        Reset();
+        _elements = [.. elements];
+    }
+
     private void PushUndo()
     {
         _undo.Push([.. _elements]);
@@ -98,6 +201,7 @@ public sealed class InkCanvas : Control
         PushUndo();
         _elements.Add(element);
         InvalidateVisual();
+        Changed?.Invoke();
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -116,22 +220,35 @@ public sealed class InkCanvas : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         var point = e.GetCurrentPoint(this);
-        if (e.Source != this || !point.Properties.IsLeftButtonPressed) return;
+        if (e.Source != this || _gesture != null || _panFrom != null) return;
+        var buttons = point.Properties;
+        if (CanNavigate && (buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed || (_panKeyHeld && buttons.IsLeftButtonPressed)))
+        {
+            CommitText();
+            _panFrom = point.Position;
+            ApplyCursor();
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
+        if (!buttons.IsLeftButtonPressed) return;
         CommitText();
         e.Handled = true;
 
-        var position = point.Position;
+        var position = ToBoard(point.Position);
         var tool = _settings.Tool;
         switch (tool)
         {
             case Tool.Text:
-                StartText(position);
+                StartText(point.Position);
                 return;
             case Tool.Pen:
-                StartStroke(new Stroke(_settings.Color, _settings.Size, e.Pointer.Type == PointerType.Pen), 1, point);
+                StartStroke(new Stroke(_settings.Color, _settings.Size / _zoom, e.Pointer.Type == PointerType.Pen, StrokePrecision / _zoom),
+                    1, point);
                 break;
             case Tool.Highlighter:
-                StartStroke(new Stroke(_settings.Color, _settings.HighlighterSize, usesPressure: false), HighlighterOpacity, point);
+                StartStroke(new Stroke(_settings.Color, _settings.HighlighterSize / _zoom, usesPressure: false, StrokePrecision / _zoom),
+                    HighlighterOpacity, point);
                 break;
             case Tool.Eraser:
                 _beforeErase = [.. _elements];
@@ -154,12 +271,19 @@ public sealed class InkCanvas : Control
     {
         _stroke = stroke;
         _strokeOpacity = opacity;
-        stroke.Add(point.Position, point.Properties.Pressure);
+        stroke.Add(ToBoard(point.Position), point.Properties.Pressure);
         _preview = new StrokeElement(stroke, opacity);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
+        if (_panFrom is { } from)
+        {
+            var position = e.GetPosition(this);
+            _panFrom = position;
+            SetView(new Vector(_offset.X + position.X - from.X, _offset.Y + position.Y - from.Y), _zoom);
+            return;
+        }
         switch (_gesture)
         {
             case null:
@@ -167,18 +291,19 @@ public sealed class InkCanvas : Control
             case Tool.Pen or Tool.Highlighter:
                 // Intermediate points: every sample since the last event, not one per frame.
                 foreach (var point in e.GetIntermediatePoints(this))
-                    _stroke!.Add(point.Position, point.Properties.Pressure);
+                    _stroke!.Add(ToBoard(point.Position), point.Properties.Pressure);
                 _preview = new StrokeElement(_stroke!, _strokeOpacity);
                 break;
             case Tool.Eraser:
                 foreach (var point in e.GetIntermediatePoints(this))
                 {
-                    EraseAlong(_lastErasePoint, point.Position);
-                    _lastErasePoint = point.Position;
+                    var position = ToBoard(point.Position);
+                    EraseAlong(_lastErasePoint, position);
+                    _lastErasePoint = position;
                 }
                 break;
             default:
-                _preview = ShapeTo(e.GetPosition(this), e.KeyModifiers);
+                _preview = ShapeTo(ToBoard(e.GetPosition(this)), e.KeyModifiers);
                 break;
         }
         InvalidateVisual();
@@ -186,17 +311,38 @@ public sealed class InkCanvas : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
-        if (_gesture is Tool.Pen or Tool.Highlighter) _stroke?.Finish(e.GetPosition(this));
-        else if (_gesture is not (null or Tool.Eraser)) _preview = ShapeTo(e.GetPosition(this), e.KeyModifiers);
+        if (_panFrom != null)
+        {
+            EndPan();
+            e.Pointer.Capture(null);
+            return;
+        }
+        var position = ToBoard(e.GetPosition(this));
+        if (_gesture is Tool.Pen or Tool.Highlighter) _stroke?.Finish(position);
+        else if (_gesture is not (null or Tool.Eraser)) _preview = ShapeTo(position, e.KeyModifiers);
         EndGesture();
     }
 
-    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e) => EndGesture();
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        EndPan();
+        EndGesture();
+    }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
-        _settings.Grow(Math.Sign(e.Delta.Y));
+        if (CanNavigate && (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta)))
+            ZoomAt(e.GetPosition(this), Math.Pow(1.2, e.Delta.Y));
+        else
+            _settings.Grow(Math.Sign(e.Delta.Y));
         e.Handled = true;
+    }
+
+    private void EndPan()
+    {
+        if (_panFrom == null) return;
+        _panFrom = null;
+        ApplyCursor();
     }
 
     private void EndGesture()
@@ -215,10 +361,11 @@ public sealed class InkCanvas : Control
                 {
                     _undo.Push(_beforeErase);
                     _redo.Clear();
+                    Changed?.Invoke();
                 }
                 break;
             default:
-                if (Distance(_start, _end) >= MinShapeLength && _preview != null) Commit(_preview);
+                if (Distance(_start, _end) * _zoom >= MinShapeLength && _preview != null) Commit(_preview);
                 break;
         }
         _stroke = null;
@@ -238,29 +385,30 @@ public sealed class InkCanvas : Control
         };
         if (modifiers.HasFlag(KeyModifiers.Shift)) end = ShapeElement.Constrain(kind, _start, end);
         _end = end;
-        return new ShapeElement(kind, _start, end, _settings.Color, _settings.Size);
+        return new ShapeElement(kind, _start, end, _settings.Color, _settings.Size / _zoom);
     }
 
     /// <summary>Removes every element touched by the eraser moving from <paramref name="from"/> to <paramref name="to"/>.</summary>
     private void EraseAlong(Point from, Point to)
     {
-        var radius = _settings.EraserSize / 2;
+        var radius = _settings.EraserSize / 2 / _zoom;
         var steps = Math.Max(1, (int)Math.Ceiling(Distance(from, to) / (radius / 2)));
         for (var i = 0; i <= steps; i++)
         {
             var t = (double)i / steps;
             var point = new Point(from.X + (to.X - from.X) * t, from.Y + (to.Y - from.Y) * t);
-            _elements.RemoveAll(element => element.HitTest(point, radius));
+            _elements.RemoveAll(element => element.Bounds.Inflate(radius).Contains(point) && element.HitTest(point, radius));
         }
     }
 
     private static double Distance(Point a, Point b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
 
+    /// <summary>Opens a text box at <paramref name="position"/>, in control coordinates.</summary>
     private void StartText(Point position)
     {
         _editorColor = _settings.Color;
         _editorFontSize = _settings.FontSize;
-        var brush = new SolidColorBrush(_editorColor);
+        var brush = new SolidColorBrush(ToolSettings.Display(_editorColor, _darkBackground));
         var editor = new TextBox
         {
             AcceptsReturn = true,
@@ -313,10 +461,12 @@ public sealed class InkCanvas : Control
 
     private void OnEditorKeyDown(object? sender, KeyEventArgs e)
     {
-        // Enter validates, Shift+Enter starts a new line.
-        if (e.Key != Key.Enter || e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
-        e.Handled = true;
-        CommitText();
+        // Enter and Escape validate, Shift+Enter starts a new line.
+        if (e.Key == Key.Escape || (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift)))
+        {
+            e.Handled = true;
+            CommitText();
+        }
     }
 
     /// <summary>Turns the text being typed into a text element.</summary>
@@ -330,7 +480,7 @@ public sealed class InkCanvas : Control
             // Place the element exactly where the editor displayed the text.
             var presenter = editor.GetVisualDescendants().OfType<TextPresenter>().FirstOrDefault();
             var origin = presenter?.TranslatePoint(default, this) ?? _editorPosition;
-            Commit(new TextElement(text, origin, _editorColor, _editorFontSize));
+            Commit(new TextElement(text, ToBoard(origin), _editorColor, _editorFontSize / _zoom));
         }
         RemoveEditor(editor);
         Focus();
@@ -347,15 +497,20 @@ public sealed class InkCanvas : Control
     {
         // A transparent fill makes the whole surface hit-testable.
         context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
-        foreach (var element in _elements)
-            element.Render(context);
-        _preview?.Render(context);
+        var visible = new Rect(ToBoard(default), ToBoard(new Point(Bounds.Width, Bounds.Height)));
+        using (context.PushTransform(Matrix.CreateScale(_zoom, _zoom) * Matrix.CreateTranslation(_offset)))
+        {
+            foreach (var element in _elements)
+                if (element.Bounds.Intersects(visible))
+                    element.Render(context, _darkBackground);
+            _preview?.Render(context, _darkBackground);
+        }
     }
 
     private void UpdateCursor()
     {
         var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
-        var color = _settings.Color;
+        var color = ToolSettings.Display(_settings.Color, _darkBackground);
         var previous = _cursor;
         _cursor = _settings.Tool switch
         {
@@ -366,7 +521,9 @@ public sealed class InkCanvas : Control
             Tool.Text => new Cursor(StandardCursorType.Ibeam),
             _ => new Cursor(StandardCursorType.Cross),
         };
-        Cursor = _cursor;
+        ApplyCursor();
         previous?.Dispose();
     }
+
+    private void ApplyCursor() => Cursor = _panFrom != null || _panKeyHeld ? _panCursor : _cursor;
 }
