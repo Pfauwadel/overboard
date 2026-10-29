@@ -84,6 +84,18 @@ public sealed class App : Application
             Autostart.Set(!Autostart.IsEnabled);
             autostartItem.IsChecked = Autostart.IsEnabled;
         };
+        var updatesItem = new NativeMenuItem("Rechercher les mises à jour")
+        {
+            ToggleType = MenuItemToggleType.CheckBox,
+            IsChecked = _preferences.CheckForUpdates,
+        };
+        updatesItem.Click += (_, _) =>
+        {
+            _preferences.CheckForUpdates = !_preferences.CheckForUpdates;
+            _preferences.Save();
+            updatesItem.IsChecked = _preferences.CheckForUpdates;
+            if (_preferences.CheckForUpdates) CheckForUpdate();
+        };
         var versionItem = new NativeMenuItem($"Overboard {AppInfo.Version} : versions sur GitHub");
         versionItem.Click += (_, _) => AppInfo.OpenUrl(AppInfo.ReleasesUrl);
         var quitItem = new NativeMenuItem("Quitter Overboard");
@@ -96,7 +108,7 @@ public sealed class App : Application
             Menu =
             [
                 _toggleItem, boardItem, new NativeMenuItemSeparator(),
-                CreateMouseButtonMenu(), autostartItem, new NativeMenuItemSeparator(),
+                CreateMouseButtonMenu(), autostartItem, updatesItem, new NativeMenuItemSeparator(),
                 versionItem, quitItem,
             ],
         };
@@ -115,7 +127,9 @@ public sealed class App : Application
 
     private async void CheckForUpdate()
     {
-        if (_updateItem != null || await UpdateChecker.FindNewerReleaseAsync() is not { } release) return;
+        // Unchecking the menu item means no request at all, not just no notification.
+        if (!_preferences.CheckForUpdates || _updateItem != null) return;
+        if (await UpdateChecker.FindNewerReleaseAsync() is not { } release) return;
         _updateItem = new NativeMenuItem($"Nouvelle version {release.Version} : télécharger");
         _updateItem.Click += (_, _) => AppInfo.OpenUrl(release.Url);
         _tray!.Menu!.Items.Insert(0, _updateItem);

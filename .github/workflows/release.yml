@@ -123,4 +123,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "Overboard ${GITHUB_REF_NAME#v}" \
+            --notes "[Code signing policy](https://github.com/$GITHUB_REPOSITORY#code-signing-policy) · [Confidentialité](https://github.com/$GITHUB_REPOSITORY#confidentialité) · [Licences tierces](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/THIRD-PARTY-NOTICES.md)" \
             --generate-notes

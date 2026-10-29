@@ -12,6 +12,9 @@ public sealed class AppSettings
     /// <summary>Mouse button that switches drawing mode on and off, from anywhere. NoButton for none.</summary>
     public MouseButton ToggleMouseButton { get; set; } = MouseButton.Button5;
 
+    /// <summary>Whether to ask GitHub daily for a newer release: Overboard's only network access.</summary>
+    public bool CheckForUpdates { get; set; } = true;
+
     public static AppSettings Load()
     {
         try

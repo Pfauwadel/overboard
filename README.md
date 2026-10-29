@@ -9,14 +9,27 @@ Télécharger le fichier de sa plateforme dans les [Releases](https://github.com
 un exécutable autonome, sans installation ni .NET à installer.
 
 - **Windows** : `Overboard-x.y.z-win-x64.zip` (ou `win-arm64`), extraire le dossier où l'on veut et lancer `Overboard.exe` (garder `uiohook.dll` à côté).
-  L'exécutable n'est pas signé : au premier lancement, SmartScreen demande de confirmer (« Informations complémentaires » → « Exécuter quand même »).
+  L'exécutable n'est pas encore signé (voir [Code signing policy](#code-signing-policy)) : au premier lancement,
+  SmartScreen demande de confirmer (« Informations complémentaires » → « Exécuter quand même »).
 - **macOS** : `Overboard-x.y.z-macos-arm64.zip` (Apple Silicon) ou `macos-x64` (Intel), glisser `Overboard.app` dans Applications.
   L'application n'est pas notarisée : la première fois, clic droit → Ouvrir, ou `xattr -dr com.apple.quarantine /Applications/Overboard.app`.
 - **Linux** : `Overboard-x.y.z-linux-x64.tar.gz`, extraire le dossier et lancer `./Overboard`.
 
-Dans le menu de l'icône : **Lancer au démarrage de la session**, et la version installée (lien vers les Releases).
-Overboard vérifie chaque jour s'il existe une version plus récente et la propose en haut de ce menu ;
-cette vérification interroge GitHub sans authentification (dépôt public).
+Dans le menu de l'icône : **Lancer au démarrage de la session**, **Rechercher les mises à jour**,
+et la version installée (lien vers les Releases). Quand une version plus récente existe, elle est proposée en haut de ce menu.
+
+## Désinstaller
+
+Overboard ne s'installe pas : il suffit d'effacer ce qu'il a créé.
+
+1. Dans le menu de l'icône, décocher **Lancer au démarrage de la session** (si cochée), puis **Quitter Overboard**.
+2. Supprimer le dossier extrait (Windows, Linux) ou `Overboard.app` (macOS).
+3. Supprimer le dossier de données (tableau sauvegardé automatiquement et préférences) :
+   - Windows : `%LocalAppData%\Overboard`
+   - macOS : `~/Library/Application Support/Overboard`
+   - Linux : `~/.local/share/Overboard`
+
+Les fichiers `.overboard` enregistrés ailleurs restent à l'utilisateur.
 
 ## Lancer depuis les sources
 
@@ -104,6 +117,40 @@ git push origin v0.2.0
 
 Pour obtenir les fichiers sans rien publier : Actions → Release → *Run workflow* ; ils sont alors joints à l'exécution.
 En local : `dotnet publish src/Overboard -c Release -r win-x64` (ou `linux-x64`, `osx-arm64`…).
+
+## Confidentialité
+
+Overboard fonctionne entièrement sur l'ordinateur : pas de compte, pas de statistiques d'usage, rien n'est envoyé ailleurs,
+à une exception près.
+
+- **Recherche de mises à jour** : au démarrage puis une fois par jour, Overboard demande à GitHub
+  (`api.github.com`) quelle est la dernière version publiée. Cette requête ne contient que ce que tout accès web transmet
+  (adresse IP, version d'Overboard dans l'en-tête `User-Agent`), et relève de la
+  [déclaration de confidentialité de GitHub](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
+  Elle se désactive dans le menu de l'icône (**Rechercher les mises à jour**) : plus aucune connexion n'est alors établie.
+- **Clavier et souris** : pour les raccourcis globaux, Overboard observe les touches et boutons pressés dans tout le système.
+  Il ne réagit qu'à ses propres raccourcis ; rien n'est enregistré ni transmis.
+- **Captures d'écran** : faites uniquement à la demande (envoi au tableau) et conservées localement, dans le tableau.
+- **Données locales** : tableau sauvegardé automatiquement et préférences, dans le dossier indiqué à [Désinstaller](#désinstaller).
+
+## Code signing policy
+
+Les exécutables Windows des [Releases](https://github.com/Pfauwadel/overboard/releases) sont construits par
+[GitHub Actions](.github/workflows/release.yml) à partir de ce dépôt, sur des machines hébergées par GitHub.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+*Demande en cours : les versions publiées jusqu'ici ne sont pas encore signées.*
+
+Seul `Overboard.exe`, construit depuis ce dépôt, est signé ; les bibliothèques tierces livrées à côté
+(voir [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)) ne le sont pas par ce projet.
+
+Rôles :
+
+- Auteurs (committers) : [Pfauwadel](https://github.com/Pfauwadel)
+- Relecteurs (contributions extérieures) : [Pfauwadel](https://github.com/Pfauwadel)
+- Approbateurs (demandes de signature) : [Pfauwadel](https://github.com/Pfauwadel)
+
+Chaque demande de signature est approuvée manuellement par un approbateur. Le projet n'utilise aucun composant propriétaire.
 
 ## Licence
 
