@@ -15,5 +15,27 @@
   <key>NSHighResolutionCapable</key><true/>
   <!-- Lives in the menu bar: no Dock icon. -->
   <key>LSUIElement</key><true/>
+  <!-- .overboard files open with Overboard (double-click in the Finder). -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Tableau Overboard</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>io.github.pfauwadel.overboard.board</string></array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>io.github.pfauwadel.overboard.board</string>
+      <key>UTTypeDescription</key><string>Tableau Overboard</string>
+      <key>UTTypeConformsTo</key><array><string>public.json</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key><array><string>overboard</string></array>
+      </dict>
+    </dict>
+  </array>
 </dict>
 </plist>

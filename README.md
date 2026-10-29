@@ -16,13 +16,19 @@ un exécutable autonome, sans installation ni .NET à installer.
 - **Linux** : `Overboard-x.y.z-linux-x64.tar.gz`, extraire le dossier et lancer `./Overboard`.
 
 Dans le menu de l'icône : **Lancer au démarrage de la session**, **Rechercher les mises à jour**,
-et la version installée (lien vers les Releases). Quand une version plus récente existe, elle est proposée en haut de ce menu.
+**Ouvrir les fichiers .overboard avec Overboard** (Windows, Linux), et la version installée (lien vers les Releases).
+Quand une version plus récente existe, elle est proposée en haut de ce menu.
+
+Un fichier `.overboard` s'ouvre par double-clic (une fois l'association cochée ; d'office sous macOS), en le glissant
+sur le tableau, ou en ligne de commande (`Overboard chemin/vers/tableau.overboard`). Si Overboard tourne déjà, le fichier
+s'ouvre dans l'instance en cours ; relancer Overboard sans fichier affiche le tableau.
 
 ## Désinstaller
 
 Overboard ne s'installe pas : il suffit d'effacer ce qu'il a créé.
 
-1. Dans le menu de l'icône, décocher **Lancer au démarrage de la session** (si cochée), puis **Quitter Overboard**.
+1. Dans le menu de l'icône, décocher **Lancer au démarrage de la session** et **Ouvrir les fichiers .overboard avec Overboard**
+   (si cochées), puis **Quitter Overboard**.
 2. Supprimer le dossier extrait (Windows, Linux) ou `Overboard.app` (macOS).
 3. Supprimer le dossier de données (tableau sauvegardé automatiquement et préférences) :
    - Windows : `%LocalAppData%\Overboard`
@@ -108,7 +114,7 @@ L'envoi au tableau n'a été essayé que sous Windows.
 - `Controls/` : barre d'outils et bandeau d'aide, communs aux deux
 - `Input/` : raccourcis clavier globaux via [SharpHook](https://github.com/TolikPylypchuk/SharpHook)
 - `App.cs` : icône et menu de la zone de notification
-- `Distribution/` : version, lancement au démarrage de la session, recherche de nouvelle version
+- `Distribution/` : version, instance unique, association des fichiers `.overboard`, lancement au démarrage de la session, recherche de nouvelle version
 
 ## Publier une version
 
@@ -122,6 +128,9 @@ git push origin v0.2.0
 
 Pour obtenir les fichiers sans rien publier : Actions → Release → *Run workflow* ; ils sont alors joints à l'exécution.
 En local : `dotnet publish src/Overboard -c Release -r win-x64` (ou `linux-x64`, `osx-arm64`…).
+
+La variable d'environnement `OVERBOARD_DATA` fait utiliser un autre dossier de données (tableau, préférences) :
+l'Overboard ainsi lancé est indépendant de celui de tous les jours, pratique pour tester.
 
 ## Confidentialité
 

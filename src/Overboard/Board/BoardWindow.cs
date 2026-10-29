@@ -1,4 +1,5 @@
 using Overboard.Controls;
+using Overboard.Distribution;
 using Overboard.Ink;
 using Overboard.Overlay;
 using Avalonia;
@@ -17,8 +18,7 @@ namespace Overboard.Board;
 /// </summary>
 public sealed class BoardWindow : Window
 {
-    public static readonly string DefaultAutosavePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Overboard", "tableau" + BoardFile.Extension);
+    public static readonly string DefaultAutosavePath = Path.Combine(AppInfo.DataDirectory, "tableau" + BoardFile.Extension);
 
     private static readonly TimeSpan AutosaveDelay = TimeSpan.FromSeconds(1);
     private static readonly FilePickerFileType FileType = new("Tableau Overboard") { Patterns = ["*" + BoardFile.Extension] };
@@ -78,6 +78,9 @@ public sealed class BoardWindow : Window
         };
         Deactivated += (_, _) => _canvas.PanKeyHeld = false;
         Closing += (_, _) => SaveSession();
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
         Restore();
     }
 
@@ -240,6 +243,31 @@ public sealed class BoardWindow : Window
         });
         if (files.Count == 0 || files[0].TryGetLocalPath() is not { } path) return;
         Open(path);
+    }
+
+    /// <summary>Opens a board file given from outside (double-click, dropped file), offering to save the current board first.</summary>
+    public async Task OpenFileAsync(string path)
+    {
+        // Already the open board: nothing to reload.
+        if (_filePath != null && Path.GetFullPath(path).Equals(Path.GetFullPath(_filePath), StringComparison.OrdinalIgnoreCase)) return;
+        if (!await ConfirmReplaceAsync()) return;
+        Open(path);
+    }
+
+    private static bool IsBoardFile(IStorageItem item) =>
+        item is IStorageFile && Path.GetExtension(item.Name).Equals(BoardFile.Extension, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Board files dropped on the window (pictures are handled by the canvas).</summary>
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        if (e.DataTransfer.TryGetFiles()?.Any(IsBoardFile) == true) e.DragEffects = DragDropEffects.Copy;
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        if (e.Handled || e.DataTransfer.TryGetFiles()?.FirstOrDefault(IsBoardFile)?.TryGetLocalPath() is not { } path) return;
+        e.Handled = true;
+        _ = OpenFileAsync(path);
     }
 
     public void Open(string path)

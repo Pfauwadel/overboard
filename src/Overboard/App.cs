@@ -1,4 +1,5 @@
 using Overboard.Board;
+using Avalonia.Platform.Storage;
 using Overboard.Distribution;
 using Overboard.Ink;
 using Overboard.Input;
@@ -25,6 +26,10 @@ public sealed class App : Application
     private NativeMenuItem? _updateItem;
     private WindowIcon? _idleIcon;
     private WindowIcon? _activeIcon;
+    private readonly SingleInstance? _instance;
+
+    /// <param name="instance">Receives later launches of Overboard (files to open), if given.</param>
+    public App(SingleInstance? instance = null) => _instance = instance;
 
     public override void Initialize() => Styles.Add(new FluentTheme());
 
@@ -50,6 +55,15 @@ public sealed class App : Application
             _overlays.Initialize();
             _input.Start();
             ScheduleUpdateChecks();
+
+            // Files to open: on the command line (Windows, Linux), later launches, and the Finder (macOS).
+            _instance?.Listen(OpenLaunched);
+            if (TryGetFeature(typeof(IActivatableLifetime)) is IActivatableLifetime activatable)
+                activatable.Activated += (_, e) =>
+                {
+                    if (e is FileActivatedEventArgs { Files: [var file, ..] } && file.TryGetLocalPath() is { } path) OpenLaunched(path);
+                };
+            if (desktop.Args?.FirstOrDefault(File.Exists) is { } launchFile) OpenLaunched(launchFile);
 
             desktop.Exit += (_, _) =>
             {
@@ -112,6 +126,21 @@ public sealed class App : Application
                 versionItem, quitItem,
             ],
         };
+        if (FileAssociation.IsConfigurable)
+        {
+            // Opt-in: changes which application opens .overboard files.
+            var associationItem = new NativeMenuItem($"Ouvrir les fichiers {BoardFile.Extension} avec Overboard")
+            {
+                ToggleType = MenuItemToggleType.CheckBox,
+                IsChecked = FileAssociation.IsRegistered(),
+            };
+            associationItem.Click += (_, _) =>
+            {
+                FileAssociation.Set(!FileAssociation.IsRegistered());
+                associationItem.IsChecked = FileAssociation.IsRegistered();
+            };
+            _tray.Menu.Items.Insert(_tray.Menu.Items.IndexOf(updatesItem) + 1, associationItem);
+        }
         _tray.Clicked += (_, _) => _overlays!.Toggle();
         TrayIcon.SetIcons(this, [_tray]);
     }
@@ -166,6 +195,14 @@ public sealed class App : Application
             menu.Items.Add(item);
         }
         return new NativeMenuItem("Bouton de souris pour dessiner") { Menu = menu };
+    }
+
+    /// <summary>A board file opened from the system, or Overboard launched again (null): shows the board.</summary>
+    private void OpenLaunched(string? path)
+    {
+        ShowBoard();
+        if (path != null && Path.GetExtension(path).Equals(BoardFile.Extension, StringComparison.OrdinalIgnoreCase))
+            _ = _board!.OpenFileAsync(path);
     }
 
     private void ShowBoard()

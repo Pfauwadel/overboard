@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Overboard.Distribution;
 using SharpHook.Data;
 
 namespace Overboard;
@@ -6,8 +7,7 @@ namespace Overboard;
 /// <summary>Preferences kept between runs, in settings.json next to the board's autosave.</summary>
 public sealed class AppSettings
 {
-    private static readonly string FilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Overboard", "settings.json");
+    private static readonly string FilePath = Path.Combine(AppInfo.DataDirectory, "settings.json");
 
     /// <summary>Mouse button that switches drawing mode on and off, from anywhere. NoButton for none.</summary>
     public MouseButton ToggleMouseButton { get; set; } = MouseButton.Button5;
