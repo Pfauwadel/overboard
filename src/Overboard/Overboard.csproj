@@ -8,7 +8,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\overboard.ico</ApplicationIcon>
     <!-- Overridden by the release workflow from the tag (v1.2.3 → 1.2.3). -->
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Product>Overboard</Product>
     <Description>Dessiner n'importe où sur l'écran, et présenter sur un tableau blanc ou noir.</Description>
     <Copyright>Copyright (c) 2026 Pfauwadel, MIT License</Copyright>
