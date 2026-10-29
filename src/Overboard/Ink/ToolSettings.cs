@@ -12,6 +12,8 @@ public enum Tool
     Rectangle,
     Ellipse,
     Text,
+    Laser,
+    Spotlight,
 }
 
 /// <summary>Current tool, color and size, shared by every overlay.</summary>
@@ -87,4 +89,5 @@ public sealed class ToolSettings
     public double HighlighterSize => Math.Clamp(Size * 4, 12, 160);
     public double EraserSize => Math.Clamp(Size * 3, 12, 160);
     public double FontSize => 12 + Size * 2.5;
+    public double SpotlightRadius => 120 + Size * 5;
 }

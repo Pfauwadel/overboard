@@ -22,6 +22,8 @@ public sealed class Toolbar : Border
         (Tool.Arrow, "Flèche (F)", "M5 19 L19 5 M10 5 H19 V14"),
         (Tool.Rectangle, "Rectangle (R)", "M4 6 H20 V18 H4 Z"),
         (Tool.Ellipse, "Ellipse (E)", "M3 12 A9 7 0 1 0 21 12 A9 7 0 1 0 3 12 Z"),
+        (Tool.Laser, "Pointeur laser (K)", "M4 20 L10.5 13.5 M14 7.5 A2.5 2.5 0 1 0 14 12.5 A2.5 2.5 0 1 0 14 7.5 Z M19 5 L20.5 3.5 M19.5 10 H22 M14 3 V1"),
+        (Tool.Spotlight, "Projecteur (O)", "M3 4 H21 V20 H3 Z M12 7 A5 5 0 1 0 12 17 A5 5 0 1 0 12 7 Z"),
     ];
 
     private readonly ToolSettings _settings;

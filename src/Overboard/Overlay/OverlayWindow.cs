@@ -12,13 +12,17 @@ public sealed class OverlayWindow : Window
 {
     private readonly ToolSettings _settings;
     private readonly Action _requestExit;
+    private readonly Action _requestSendToBoard;
     private readonly Hud _hud = new();
 
-    public OverlayWindow(PixelRect screenBounds, double screenScaling, ToolSettings settings, Action requestExit)
+    public OverlayWindow(PixelRect screenBounds, double screenScaling, ToolSettings settings, Action requestExit,
+        Action requestSendToBoard)
     {
         ScreenBounds = screenBounds;
+        ScreenScaling = screenScaling;
         _settings = settings;
         _requestExit = requestExit;
+        _requestSendToBoard = requestSendToBoard;
 
         WindowDecorations = Avalonia.Controls.WindowDecorations.None;
         Topmost = true;
@@ -41,6 +45,8 @@ public sealed class OverlayWindow : Window
         Toolbar.RedoRequested += Canvas.Redo;
         Toolbar.ClearRequested += Canvas.Clear;
         Toolbar.CloseRequested += requestExit;
+        Toolbar.AddSection(Toolbar.Button("M3 4 H21 V15 H3 Z M12 15 V20 M8 20 H16 M8.5 9.5 H15 M12.5 7 L15 9.5 L12.5 12",
+            "Envoyer au tableau (Ctrl+B)", requestSendToBoard));
         Content = new Panel { Children = { Canvas, Toolbar, _hud } };
 
         // Windows can resize a window placed on a screen with a different scale factor.
@@ -53,6 +59,7 @@ public sealed class OverlayWindow : Window
     }
 
     public PixelRect ScreenBounds { get; }
+    public double ScreenScaling { get; }
     public InkCanvas Canvas { get; }
     public Toolbar Toolbar { get; }
 
@@ -65,7 +72,9 @@ public sealed class OverlayWindow : Window
     public void ShowHelp() =>
         _hud.Show(TimeSpan.FromSeconds(3.5),
             Hud.Key("Échap"), Hud.Text("quitter"), Hud.Key("P S G T L F R E"), Hud.Text("outils"),
-            Hud.Key("1–6"), Hud.Text("couleurs"), Hud.Key("Molette"), Hud.Text("taille"));
+            Hud.Key("K"), Hud.Text("laser"), Hud.Key("O"), Hud.Text("projecteur"),
+            Hud.Key("1–6"), Hud.Text("couleurs"), Hud.Key("Molette"), Hud.Text("taille"),
+            Hud.Key("Ctrl+B"), Hud.Text("vers le tableau"));
 
     public void HideHud() => _hud.Hide();
 
@@ -77,7 +86,12 @@ public sealed class OverlayWindow : Window
             base.OnKeyDown(e);
             return;
         }
-        if (InkShortcuts.Handle(e, _settings, Canvas)) e.Handled = true;
+        if (InkShortcuts.IsCommand(e.KeyModifiers) && e.Key == Key.B)
+        {
+            _requestSendToBoard();
+            e.Handled = true;
+        }
+        else if (InkShortcuts.Handle(e, _settings, Canvas)) e.Handled = true;
         else if (e.Key == Key.Escape)
         {
             _requestExit();

@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Themes.Fluent;
+using SharpHook.Data;
 
 namespace Overboard;
 
@@ -14,6 +15,7 @@ public sealed class App : Application
 {
     private readonly GlobalInput _input = new();
     private readonly ToolSettings _settings = new();
+    private readonly AppSettings _preferences = AppSettings.Load();
     private OverlayManager? _overlays;
     private BoardWindow? _board;
     private TrayIcon? _tray;
@@ -31,6 +33,12 @@ public sealed class App : Application
 
             _overlays = new OverlayManager(_settings, () => _input.CursorPosition);
             _overlays.ActiveChanged += OnActiveChanged;
+            _overlays.Captured += captures =>
+            {
+                ShowBoard();
+                _board!.AddCaptures(captures);
+            };
+            _input.ToggleButton = _preferences.ToggleMouseButton;
             _input.TogglePressed += _overlays.Toggle;
             _input.EscapePressed += _overlays.HandleEscape;
             _input.Failed += () => _tray?.ToolTipText = $"Overboard : raccourci {GlobalInput.ToggleLabel} indisponible";
@@ -69,10 +77,41 @@ public sealed class App : Application
         {
             Icon = _idleIcon,
             ToolTipText = "Overboard",
-            Menu = [_toggleItem, boardItem, new NativeMenuItemSeparator(), quitItem],
+            Menu = [_toggleItem, boardItem, new NativeMenuItemSeparator(), CreateMouseButtonMenu(), new NativeMenuItemSeparator(), quitItem],
         };
         _tray.Clicked += (_, _) => _overlays!.Toggle();
         TrayIcon.SetIcons(this, [_tray]);
+    }
+
+    /// <summary>Choice of the mouse button that toggles drawing mode, remembered between runs.</summary>
+    private NativeMenuItem CreateMouseButtonMenu()
+    {
+        (MouseButton Button, string Label)[] choices =
+        [
+            (MouseButton.NoButton, "Aucun"),
+            (MouseButton.Button4, "Bouton latéral arrière"),
+            (MouseButton.Button5, "Bouton latéral avant"),
+        ];
+        var menu = new NativeMenu();
+        var items = new List<(MouseButton Button, NativeMenuItem Item)>();
+        foreach (var (button, label) in choices)
+        {
+            var item = new NativeMenuItem(label)
+            {
+                ToggleType = MenuItemToggleType.Radio,
+                IsChecked = button == _preferences.ToggleMouseButton,
+            };
+            item.Click += (_, _) =>
+            {
+                _preferences.ToggleMouseButton = button;
+                _preferences.Save();
+                _input.ToggleButton = button;
+                foreach (var (other, otherItem) in items) otherItem.IsChecked = other == button;
+            };
+            items.Add((button, item));
+            menu.Items.Add(item);
+        }
+        return new NativeMenuItem("Bouton de souris pour dessiner") { Menu = menu };
     }
 
     private void ShowBoard()

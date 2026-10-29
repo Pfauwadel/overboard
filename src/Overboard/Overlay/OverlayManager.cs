@@ -1,15 +1,22 @@
 using Overboard.Ink;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 
 namespace Overboard.Overlay;
+
+/// <summary>A screen as sent to the board: its picture, if the platform allows one, and the annotations drawn over it.</summary>
+/// <param name="Size">The screen size in device-independent units, the unit of the annotations.</param>
+public sealed record ScreenCapture(Bitmap? Screenshot, Size Size, IReadOnlyList<InkElement> Elements);
 
 /// <summary>Owns one overlay window per screen and switches drawing mode on and off.</summary>
 public sealed class OverlayManager(ToolSettings settings, Func<PixelPoint> cursorPosition)
 {
     /// <summary>Leaves time to render the cleared canvas before hiding, so the next show does not flash old strokes.</summary>
     private static readonly TimeSpan HideDelay = TimeSpan.FromMilliseconds(60);
+    /// <summary>Leaves time for the overlays to vanish from the screen before capturing it.</summary>
+    private static readonly TimeSpan CaptureDelay = TimeSpan.FromMilliseconds(300);
 
     private readonly List<OverlayWindow> _windows = [];
     // Never shown: gives access to the screen list before any overlay exists.
@@ -19,6 +26,9 @@ public sealed class OverlayManager(ToolSettings settings, Func<PixelPoint> curso
 
     public bool IsActive { get; private set; }
     public event Action? ActiveChanged;
+
+    /// <summary>Raised with the screens sent to the board.</summary>
+    public event Action<IReadOnlyList<ScreenCapture>>? Captured;
 
     public void Initialize()
     {
@@ -77,6 +87,24 @@ public sealed class OverlayManager(ToolSettings settings, Func<PixelPoint> curso
         ActiveChanged?.Invoke();
     }
 
+    /// <summary>
+    /// Leaves drawing mode and hands the board every annotated screen (or the one under
+    /// the cursor), captured once the overlays are gone, with the annotations drawn over it.
+    /// </summary>
+    public async void SendToBoard()
+    {
+        if (!IsActive) return;
+        foreach (var window in _windows) window.Canvas.CommitText();
+        var cursor = cursorPosition();
+        var sources = _windows.Where(w => w.Canvas.Elements.Count > 0).OrderBy(w => w.ScreenBounds.X).ToList();
+        if (sources.Count == 0) sources = [_windows.FirstOrDefault(w => w.ScreenBounds.Contains(cursor)) ?? _windows[0]];
+        var annotated = sources.Select(w => (w.ScreenBounds, w.ScreenScaling, w.Canvas.Bounds.Size, Elements: w.Canvas.Elements.ToList())).ToList();
+
+        Deactivate();
+        await Task.Delay(CaptureDelay);
+        Captured?.Invoke([.. annotated.Select(a => new ScreenCapture(ScreenGrabber.Grab(a.ScreenBounds, a.ScreenScaling), a.Size, a.Elements))]);
+    }
+
     public void Shutdown()
     {
         foreach (var window in _windows) window.Close();
@@ -91,6 +119,6 @@ public sealed class OverlayManager(ToolSettings settings, Func<PixelPoint> curso
         foreach (var window in _windows) window.Close();
         _windows.Clear();
         foreach (var screen in _probe!.Screens.All)
-            _windows.Add(new OverlayWindow(screen.Bounds, screen.Scaling, settings, Deactivate));
+            _windows.Add(new OverlayWindow(screen.Bounds, screen.Scaling, settings, Deactivate, SendToBoard));
     }
 }

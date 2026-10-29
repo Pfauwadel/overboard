@@ -1,5 +1,6 @@
 using Overboard.Controls;
 using Overboard.Ink;
+using Overboard.Overlay;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -252,6 +253,29 @@ public sealed class BoardWindow : Window
         _modified = false;
         UpdateTitle();
         SaveSession();
+    }
+
+    /// <summary>Places screens sent from drawing mode to the right of the content, as one undoable step, and shows them.</summary>
+    public void AddCaptures(IReadOnlyList<ScreenCapture> captures)
+    {
+        const double gap = 80;
+        var content = _canvas.ContentBounds;
+        var x = content is { } bounds ? bounds.Right + gap : 0;
+        var y = content?.Top ?? 0;
+        var added = new List<InkElement>();
+        Rect? area = null;
+        foreach (var capture in captures)
+        {
+            var frame = new Rect(new Point(x, y), capture.Size);
+            if (capture.Screenshot is { } picture) added.Add(new ImageElement(picture, frame));
+            added.AddRange(capture.Elements.Select(e => e.Translate(new Vector(x, y))));
+            area = area?.Union(frame) ?? frame;
+            x = frame.Right + gap;
+        }
+        _canvas.Add(added);
+        if (area is { } shown) _canvas.ShowArea(shown);
+        if (captures.Any(c => c.Screenshot is null))
+            _hud.ShowMessage("Capture d'écran indisponible : seules les annotations ont été envoyées");
     }
 
     private async Task NewAsync()

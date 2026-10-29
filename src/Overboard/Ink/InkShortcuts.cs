@@ -36,6 +36,8 @@ public static class InkShortcuts
             Key.F => Tool.Arrow,
             Key.R => Tool.Rectangle,
             Key.E => Tool.Ellipse,
+            Key.K => Tool.Laser,
+            Key.O => Tool.Spotlight,
             _ => null,
         };
 

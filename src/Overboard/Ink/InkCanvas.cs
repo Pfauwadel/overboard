@@ -4,6 +4,7 @@ using Avalonia.Controls.Presenters;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.VisualTree;
 
 namespace Overboard.Ink;
@@ -21,6 +22,10 @@ public sealed class InkCanvas : Control
     private const double HighlighterOpacity = 0.4;
     private const double MinShapeLength = 3;
     private const double StrokePrecision = 0.4;
+    private const long LaserLifetime = 1000;
+
+    private static readonly Color LaserColor = Color.Parse("#ff2d2d");
+    private static readonly IBrush SpotlightVeil = new ImmutableSolidColorBrush(Color.FromArgb(170, 0, 0, 0));
 
     private readonly ToolSettings _settings;
     // Snapshots of the element list: elements are immutable, so copying references is enough.
@@ -34,6 +39,13 @@ public sealed class InkCanvas : Control
     private Point? _panFrom;
     private bool _panKeyHeld;
     private bool _darkBackground;
+    private Rect? _pendingArea;
+    // Last pointer position in control coordinates, where the spotlight shines.
+    private Point? _pointer;
+
+    // Laser trails fade point by point: each point lives LaserLifetime ms. Board coordinates.
+    private readonly List<List<LaserPoint>> _laserTrails = [];
+    private bool _laserFrameRequested;
 
     // Gesture in progress: the tool it started with, even if the tool changes meanwhile.
     private Tool? _gesture;
@@ -120,22 +132,51 @@ public sealed class InkCanvas : Control
 
     public void ZoomBy(double factor) => ZoomAt(new Rect(Bounds.Size).Center, factor);
 
+    /// <summary>The area covered by every element, if any.</summary>
+    public Rect? ContentBounds => _elements.Count == 0 ? null : _elements.Select(e => e.Bounds).Aggregate((a, b) => a.Union(b));
+
     /// <summary>Shows every element, without enlarging beyond 100 %.</summary>
     public void FitContent()
     {
-        if (_elements.Count == 0)
+        if (ContentBounds is { } content) ShowArea(content);
+        else SetView(default, 1);
+    }
+
+    /// <summary>Centers <paramref name="area"/> (board coordinates), zoomed out if needed to fit, never enlarged beyond 100 %.</summary>
+    public void ShowArea(Rect area)
+    {
+        var size = Bounds.Size;
+        if (size.Width <= 0 || size.Height <= 0)
         {
-            SetView(default, 1);
+            // Not laid out yet: done on the first size change.
+            _pendingArea = area;
             return;
         }
         const double margin = 48;
-        var content = _elements.Select(e => e.Bounds).Aggregate((a, b) => a.Union(b));
-        var size = Bounds.Size;
         var zoom = Math.Min(1, Math.Min(
-            Math.Max(size.Width - 2 * margin, 1) / Math.Max(content.Width, 1),
-            Math.Max(size.Height - 2 * margin, 1) / Math.Max(content.Height, 1)));
+            Math.Max(size.Width - 2 * margin, 1) / Math.Max(area.Width, 1),
+            Math.Max(size.Height - 2 * margin, 1) / Math.Max(area.Height, 1)));
         zoom = Math.Clamp(zoom, MinZoom, MaxZoom);
-        SetView(new Vector(size.Width / 2 - content.Center.X * zoom, size.Height / 2 - content.Center.Y * zoom), zoom);
+        SetView(new Vector(size.Width / 2 - area.Center.X * zoom, size.Height / 2 - area.Center.Y * zoom), zoom);
+    }
+
+    protected override void OnSizeChanged(SizeChangedEventArgs e)
+    {
+        base.OnSizeChanged(e);
+        if (_pendingArea is not { } area) return;
+        _pendingArea = null;
+        ShowArea(area);
+    }
+
+    /// <summary>Adds elements as one undoable step.</summary>
+    public void Add(IReadOnlyCollection<InkElement> elements)
+    {
+        CommitText();
+        if (elements.Count == 0) return;
+        PushUndo();
+        _elements.AddRange(elements);
+        InvalidateVisual();
+        Changed?.Invoke();
     }
 
     public void Undo()
@@ -180,6 +221,7 @@ public sealed class InkCanvas : Control
         _stroke = null;
         _preview = null;
         _beforeErase = null;
+        _laserTrails.Clear();
         InvalidateVisual();
     }
 
@@ -255,6 +297,12 @@ public sealed class InkCanvas : Control
                 _lastErasePoint = position;
                 EraseAlong(position, position);
                 break;
+            case Tool.Laser:
+                _laserTrails.Add([new LaserPoint(position, Environment.TickCount64)]);
+                RequestLaserFrame();
+                break;
+            case Tool.Spotlight:
+                return;
             default:
                 _start = position;
                 _gesture = tool;
@@ -277,6 +325,8 @@ public sealed class InkCanvas : Control
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
+        _pointer = e.GetPosition(this);
+        if (_settings.Tool == Tool.Spotlight) InvalidateVisual();
         if (_panFrom is { } from)
         {
             var position = e.GetPosition(this);
@@ -301,6 +351,11 @@ public sealed class InkCanvas : Control
                     EraseAlong(_lastErasePoint, position);
                     _lastErasePoint = position;
                 }
+                break;
+            case Tool.Laser:
+                foreach (var point in e.GetIntermediatePoints(this))
+                    _laserTrails[^1].Add(new LaserPoint(ToBoard(point.Position), Environment.TickCount64));
+                RequestLaserFrame();
                 break;
             default:
                 _preview = ShapeTo(ToBoard(e.GetPosition(this)), e.KeyModifiers);
@@ -327,6 +382,13 @@ public sealed class InkCanvas : Control
     {
         EndPan();
         EndGesture();
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        _pointer = null;
+        if (_settings.Tool == Tool.Spotlight) InvalidateVisual();
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
@@ -363,6 +425,9 @@ public sealed class InkCanvas : Control
                     _redo.Clear();
                     Changed?.Invoke();
                 }
+                break;
+            case Tool.Laser:
+                // The trail fades by itself.
                 break;
             default:
                 if (Distance(_start, _end) * _zoom >= MinShapeLength && _preview != null) Commit(_preview);
@@ -504,7 +569,61 @@ public sealed class InkCanvas : Control
                 if (element.Bounds.Intersects(visible))
                     element.Render(context, _darkBackground);
             _preview?.Render(context, _darkBackground);
+            RenderLaser(context);
         }
+        if (_settings.Tool == Tool.Spotlight) RenderSpotlight(context);
+    }
+
+    /// <summary>A red glow with a bright core, thinning and fading along the trail.</summary>
+    private void RenderLaser(DrawingContext context)
+    {
+        var now = Environment.TickCount64;
+        foreach (var trail in _laserTrails)
+        {
+            for (var i = 1; i < trail.Count; i++)
+            {
+                var life = 1 - (double)(now - trail[i - 1].Time) / LaserLifetime;
+                if (life <= 0) continue;
+                var (from, to) = (trail[i - 1].Position, trail[i].Position);
+                context.DrawLine(new ImmutablePen(new ImmutableSolidColorBrush(LaserColor, 0.3 * life), (6 + 10 * life) / _zoom,
+                    lineCap: PenLineCap.Round), from, to);
+                context.DrawLine(new ImmutablePen(new ImmutableSolidColorBrush(LaserColor, life), (2 + 3 * life) / _zoom,
+                    lineCap: PenLineCap.Round), from, to);
+            }
+        }
+    }
+
+    /// <summary>Redraws until every laser trail has faded.</summary>
+    private void RequestLaserFrame()
+    {
+        InvalidateVisual();
+        if (_laserFrameRequested || TopLevel.GetTopLevel(this) is not { } topLevel) return;
+        _laserFrameRequested = true;
+        topLevel.RequestAnimationFrame(_ =>
+        {
+            _laserFrameRequested = false;
+            var oldest = Environment.TickCount64 - LaserLifetime;
+            foreach (var trail in _laserTrails) trail.RemoveAll(p => p.Time < oldest);
+            // The trail being drawn stays, even faded out: the next move continues it.
+            var active = _gesture == Tool.Laser ? _laserTrails[^1] : null;
+            _laserTrails.RemoveAll(trail => trail.Count == 0 && trail != active);
+            if (_laserTrails.Any(trail => trail.Count > 0)) RequestLaserFrame();
+            else InvalidateVisual();
+        });
+    }
+
+    /// <summary>Darkens everything but a circle around the pointer.</summary>
+    private void RenderSpotlight(DrawingContext context)
+    {
+        var all = new RectangleGeometry(new Rect(Bounds.Size));
+        if (_pointer is not { } p)
+        {
+            context.DrawGeometry(SpotlightVeil, null, all);
+            return;
+        }
+        var r = _settings.SpotlightRadius;
+        var spot = new EllipseGeometry(new Rect(p.X - r, p.Y - r, r * 2, r * 2));
+        context.DrawGeometry(SpotlightVeil, null, new CombinedGeometry(GeometryCombineMode.Exclude, all, spot));
     }
 
     private void UpdateCursor()
@@ -519,11 +638,18 @@ public sealed class InkCanvas : Control
                 _settings.HighlighterSize, scaling),
             Tool.Eraser => BrushCursor.CreateEraser(_settings.EraserSize, scaling),
             Tool.Text => new Cursor(StandardCursorType.Ibeam),
+            Tool.Laser => BrushCursor.Create(LaserColor, 12, scaling),
+            // The bright circle is the cursor.
+            Tool.Spotlight => new Cursor(StandardCursorType.None),
             _ => new Cursor(StandardCursorType.Cross),
         };
         ApplyCursor();
         previous?.Dispose();
+        // The spotlight appears, disappears or resizes with the tool settings.
+        InvalidateVisual();
     }
 
     private void ApplyCursor() => Cursor = _panFrom != null || _panKeyHeld ? _panCursor : _cursor;
+
+    private readonly record struct LaserPoint(Point Position, long Time);
 }

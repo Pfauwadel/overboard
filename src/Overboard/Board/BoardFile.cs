@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Overboard.Ink;
 using Avalonia;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 
 namespace Overboard.Board;
 
@@ -64,7 +65,7 @@ public static class BoardFile
             var session = file.Session is { } s ? new BoardSession(s.Path, s.Modified) : null;
             return (content, session);
         }
-        catch (Exception e) when (e is JsonException or FormatException or NotSupportedException or ArgumentException)
+        catch (Exception e) when (e is JsonException or FormatException or NotSupportedException or ArgumentException or InvalidOperationException)
         {
             throw new InvalidDataException("Ce fichier est endommagé ou n'est pas un tableau Overboard.", e);
         }
@@ -97,15 +98,22 @@ public static class BoardFile
             FontSize = Math.Round(t.FontSize, 3),
             Origin = Pair(t.Origin),
         },
+        ImageElement i => new ImageDto
+        {
+            Origin = Pair(i.Bounds.Position),
+            Size = [Round(i.Bounds.Width), Round(i.Bounds.Height)],
+            Png = i.Png,
+        },
         _ => throw new NotSupportedException(element.GetType().Name),
     };
 
     private static InkElement FromDto(ElementDto dto) => dto switch
     {
         StrokeDto s => new StrokeElement(
-            Stroke.FromPoints(Color.Parse(s.Color), s.Size, s.Pressure, StrokePoints(s.Points, s.Pressure)), s.Opacity),
-        ShapeDto s => new ShapeElement(s.Kind, ToPoint(s.Start), ToPoint(s.End), Color.Parse(s.Color), s.Thickness),
-        TextDto t => new TextElement(t.Text, ToPoint(t.Origin), Color.Parse(t.Color), t.FontSize),
+            Stroke.FromPoints(Color.Parse(s.Color!), s.Size, s.Pressure, StrokePoints(s.Points, s.Pressure)), s.Opacity),
+        ShapeDto s => new ShapeElement(s.Kind, ToPoint(s.Start), ToPoint(s.End), Color.Parse(s.Color!), s.Thickness),
+        TextDto t => new TextElement(t.Text, ToPoint(t.Origin), Color.Parse(t.Color!), t.FontSize),
+        ImageDto i => new ImageElement(new Bitmap(new MemoryStream(i.Png)), new Rect(ToPoint(i.Origin), ToSize(i.Size)), i.Png),
         _ => throw new NotSupportedException(dto.GetType().Name),
     };
 
@@ -121,6 +129,9 @@ public static class BoardFile
 
     private static Point ToPoint(double[] values) =>
         values is [var x, var y] ? new Point(x, y) : throw new FormatException("Point attendu : [x, y]");
+
+    private static Size ToSize(double[] values) =>
+        values is [var width, var height] ? new Size(width, height) : throw new FormatException("Taille attendue : [largeur, hauteur]");
 
     private static string Hex(Color c) =>
         c.A == 255 ? $"#{c.R:x2}{c.G:x2}{c.B:x2}" : $"#{c.A:x2}{c.R:x2}{c.G:x2}{c.B:x2}";
@@ -153,9 +164,18 @@ public static class BoardFile
     [JsonDerivedType(typeof(StrokeDto), "stroke")]
     [JsonDerivedType(typeof(ShapeDto), "shape")]
     [JsonDerivedType(typeof(TextDto), "text")]
+    [JsonDerivedType(typeof(ImageDto), "image")]
     private abstract class ElementDto
     {
-        public string Color { get; set; } = "#000000";
+        public string? Color { get; set; }
+    }
+
+    /// <summary>A picture: PNG bytes, written as base64.</summary>
+    private sealed class ImageDto : ElementDto
+    {
+        public double[] Origin { get; set; } = [];
+        public double[] Size { get; set; } = [];
+        public byte[] Png { get; set; } = [];
     }
 
     private sealed class StrokeDto : ElementDto

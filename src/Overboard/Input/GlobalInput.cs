@@ -16,6 +16,7 @@ public sealed class GlobalInput : IDisposable
 
     private readonly SimpleGlobalHook _hook = new(null);
     private volatile bool _toggleHeld;
+    private volatile int _toggleButton;
     private int _x;
     private int _y;
 
@@ -28,12 +29,21 @@ public sealed class GlobalInput : IDisposable
 
     public PixelPoint CursorPosition => new(Volatile.Read(ref _x), Volatile.Read(ref _y));
 
+    /// <summary>Mouse button that toggles drawing mode like the shortcut, NoButton for none. It never reaches applications.</summary>
+    public MouseButton ToggleButton
+    {
+        get => (MouseButton)_toggleButton;
+        set => _toggleButton = (int)value;
+    }
+
     public void Start()
     {
         _hook.KeyPressed += OnKeyPressed;
         _hook.KeyReleased += OnKeyReleased;
         _hook.MouseMoved += OnMouseMoved;
         _hook.MouseDragged += OnMouseMoved;
+        _hook.MousePressed += OnMousePressed;
+        _hook.MouseReleased += OnMouseReleased;
         _hook.RunAsync().ContinueWith(task =>
         {
             if (task.IsFaulted) Dispatcher.UIThread.Post(() => Failed?.Invoke());
@@ -62,6 +72,22 @@ public sealed class GlobalInput : IDisposable
     private void OnKeyReleased(object? sender, KeyboardHookEventArgs e)
     {
         if (e.Data.KeyCode == KeyCode.VcD) _toggleHeld = false;
+    }
+
+    private bool IsToggleButton(MouseHookEventArgs e) =>
+        e.Data.Button != MouseButton.NoButton && (int)e.Data.Button == _toggleButton;
+
+    private void OnMousePressed(object? sender, MouseHookEventArgs e)
+    {
+        if (!IsToggleButton(e)) return;
+        // Keep the button from reaching the application under the cursor (a browser would go forward).
+        e.SuppressEvent = true;
+        Dispatcher.UIThread.Post(() => TogglePressed?.Invoke());
+    }
+
+    private void OnMouseReleased(object? sender, MouseHookEventArgs e)
+    {
+        if (IsToggleButton(e)) e.SuppressEvent = true;
     }
 
     private void OnMouseMoved(object? sender, MouseHookEventArgs e)

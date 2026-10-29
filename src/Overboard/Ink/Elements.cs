@@ -1,6 +1,7 @@
 using System.Globalization;
 using Avalonia;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Media.Immutable;
 
 namespace Overboard.Ink;
@@ -14,6 +15,9 @@ public abstract class InkElement
 
     /// <summary>Whether a circle of the given radius around <paramref name="point"/> touches the element.</summary>
     public abstract bool HitTest(Point point, double radius);
+
+    /// <summary>The same element, moved by <paramref name="offset"/>.</summary>
+    public abstract InkElement Translate(Vector offset);
 }
 
 /// <summary>A freehand stroke, filled as an outline. Highlighter strokes are translucent.</summary>
@@ -42,6 +46,11 @@ public sealed class StrokeElement : InkElement
 
     public override bool HitTest(Point point, double radius) =>
         _geometry.FillContains(point) || _geometry.StrokeContains(new Pen(Brushes.Black, radius * 2), point);
+
+    public override InkElement Translate(Vector offset) => new StrokeElement(
+        Stroke.FromPoints(Stroke.Color, Stroke.Size, Stroke.UsesPressure,
+            Stroke.Points.Select(p => p with { X = p.X + offset.X, Y = p.Y + offset.Y })),
+        Opacity);
 }
 
 public enum ShapeKind
@@ -133,6 +142,8 @@ public sealed class ShapeElement : InkElement
 
     public override bool HitTest(Point point, double radius) =>
         _geometry.StrokeContains(new Pen(Brushes.Black, Thickness + radius * 2), point);
+
+    public override InkElement Translate(Vector offset) => new ShapeElement(Kind, Start + offset, End + offset, Color, Thickness);
 }
 
 public sealed class TextElement : InkElement
@@ -170,4 +181,49 @@ public sealed class TextElement : InkElement
     }
 
     public override bool HitTest(Point point, double radius) => Bounds.Inflate(radius).Contains(point);
+
+    public override InkElement Translate(Vector offset) => new TextElement(Text, Origin + offset, Color, FontSize);
+}
+
+/// <summary>A picture, such as a screen capture. Always shown as is, whatever the background.</summary>
+public sealed class ImageElement : InkElement
+{
+    private byte[]? _png;
+
+    /// <param name="png">The bitmap already encoded as PNG, if known.</param>
+    public ImageElement(Bitmap bitmap, Rect bounds, byte[]? png = null)
+    {
+        Bitmap = bitmap;
+        Bounds = bounds;
+        _png = png;
+    }
+
+    public Bitmap Bitmap { get; }
+    public override Rect Bounds { get; }
+
+    /// <summary>The bitmap as PNG, encoded once.</summary>
+    public byte[] Png
+    {
+        get
+        {
+            if (_png is null)
+            {
+                using var stream = new MemoryStream();
+                Bitmap.Save(stream, PngBitmapEncoderOptions.Default);
+                _png = stream.ToArray();
+            }
+            return _png;
+        }
+    }
+
+    public override void Render(DrawingContext context, bool darkBackground)
+    {
+        using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.HighQuality }))
+            context.DrawImage(Bitmap, Bounds);
+    }
+
+    /// <summary>The eraser removes what is drawn over a picture, never the picture itself.</summary>
+    public override bool HitTest(Point point, double radius) => false;
+
+    public override InkElement Translate(Vector offset) => new ImageElement(Bitmap, Bounds.Translate(offset), _png);
 }
