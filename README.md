@@ -6,17 +6,17 @@ Windows, macOS et Linux, en .NET 10 et [Avalonia](https://avaloniaui.net/).
 ## Installer
 
 Télécharger le fichier de sa plateforme dans les [Releases](https://github.com/Pfauwadel/overboard/releases) :
-un seul exécutable, sans installation ni .NET à installer.
+un exécutable autonome, sans installation ni .NET à installer.
 
-- **Windows** : `Overboard-x.y.z-win-x64.zip` (ou `win-arm64`), extraire `Overboard.exe` où l'on veut et le lancer.
+- **Windows** : `Overboard-x.y.z-win-x64.zip` (ou `win-arm64`), extraire le dossier où l'on veut et lancer `Overboard.exe` (garder `uiohook.dll` à côté).
   L'exécutable n'est pas signé : au premier lancement, SmartScreen demande de confirmer (« Informations complémentaires » → « Exécuter quand même »).
 - **macOS** : `Overboard-x.y.z-macos-arm64.zip` (Apple Silicon) ou `macos-x64` (Intel), glisser `Overboard.app` dans Applications.
   L'application n'est pas notarisée : la première fois, clic droit → Ouvrir, ou `xattr -dr com.apple.quarantine /Applications/Overboard.app`.
-- **Linux** : `Overboard-x.y.z-linux-x64.tar.gz`, extraire et lancer `./Overboard`.
+- **Linux** : `Overboard-x.y.z-linux-x64.tar.gz`, extraire le dossier et lancer `./Overboard`.
 
 Dans le menu de l'icône : **Lancer au démarrage de la session**, et la version installée (lien vers les Releases).
 Overboard vérifie chaque jour s'il existe une version plus récente et la propose en haut de ce menu ;
-cette vérification interroge GitHub sans authentification, elle ne voit donc rien tant que le dépôt est privé.
+cette vérification interroge GitHub sans authentification (dépôt public).
 
 ## Lancer depuis les sources
 
@@ -104,3 +104,9 @@ git push origin v0.2.0
 
 Pour obtenir les fichiers sans rien publier : Actions → Release → *Run workflow* ; ils sont alors joints à l'exécution.
 En local : `dotnet publish src/Overboard -c Release -r win-x64` (ou `linux-x64`, `osx-arm64`…).
+
+## Licence
+
+[MIT](LICENSE) : chacun peut réutiliser le code, en citant l'auteur. Les modifications de ce dépôt restent réservées à son propriétaire.
+Les composants tiers inclus dans les versions publiées et leurs licences sont listés dans [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md),
+dont libuiohook (LGPL-3.0), livrée comme bibliothèque séparée et remplaçable.

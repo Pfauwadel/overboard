@@ -37,7 +37,8 @@ jobs:
           mkdir -p dist
           for rid in win-x64 win-arm64; do
             dotnet publish "$PROJECT" -c Release -r "$rid" -p:Version="$VERSION" -o "out/$rid"
-            7z a -tzip "dist/Overboard-$VERSION-$rid.zip" "./out/$rid/Overboard.exe"
+            cp -r LICENSE THIRD-PARTY-NOTICES.md licenses "out/$rid/"
+            (cd "out/$rid" && 7z a -tzip "../../dist/Overboard-$VERSION-$rid.zip" .)
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -57,9 +58,10 @@ jobs:
         run: |
           rid=linux-x64
           dotnet publish "$PROJECT" -c Release -r "$rid" -p:Version="$VERSION" -o "out/$rid"
-          cp src/Overboard/Assets/overboard.png "out/$rid/"
+          cp -r src/Overboard/Assets/overboard.png LICENSE THIRD-PARTY-NOTICES.md licenses "out/$rid/"
           mkdir -p dist
-          tar -czf "dist/Overboard-$VERSION-$rid.tar.gz" -C "out/$rid" Overboard overboard.png
+          mv "out/$rid" out/Overboard
+          tar -czf "dist/Overboard-$VERSION-$rid.tar.gz" -C out Overboard
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -91,8 +93,9 @@ jobs:
             dotnet publish "$PROJECT" -c Release -r "$rid" -p:Version="$VERSION" -o "out/$rid"
             app="bundle/$rid/Overboard.app"
             mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-            cp "out/$rid/Overboard" "$app/Contents/MacOS/"
-            cp Overboard.icns "$app/Contents/Resources/"
+            # The executable and libuiohook (LGPL, kept as a separate, replaceable library).
+            cp "out/$rid/"* "$app/Contents/MacOS/"
+            cp -r Overboard.icns LICENSE THIRD-PARTY-NOTICES.md licenses "$app/Contents/Resources/"
             sed "s/@VERSION@/$VERSION/g" build/macos/Info.plist > "$app/Contents/Info.plist"
             # Not notarized: an ad-hoc signature is the minimum Apple Silicon needs to run it.
             codesign --force --deep --sign - "$app"
