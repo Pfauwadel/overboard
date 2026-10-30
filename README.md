@@ -47,8 +47,9 @@ dotnet run --project src/Overboard
 
 Overboard démarre dans la zone de notification (barre des tâches).
 Clic sur l'icône : dessiner sur l'écran. Menu de l'icône → **Tableau blanc** : un tableau infini dans une fenêtre.
-Le bouton latéral « avant » de la souris active aussi le dessin, de n'importe où ; il se change ou se désactive
-dans le menu de l'icône (**Bouton de souris pour dessiner**).
+Le bouton latéral « avant » de la souris active aussi le dessin, de n'importe où. Le bouton « arrière » affiche le tableau,
+ou le réduit s'il est déjà devant ; en mode dessin, il envoie l'écran annoté au tableau. Ces boutons se changent ou
+se désactivent dans le menu de l'icône (**Bouton de souris pour dessiner**, **Bouton de souris pour le tableau**).
 
 ## Raccourcis
 
@@ -59,6 +60,12 @@ dans le menu de l'icône (**Bouton de souris pour dessiner**).
 | Sélection | `V` ; clic, `Maj`+clic pour ajouter ou retirer, ou rectangle autour ; glisser pour déplacer |
 | Sélectionner tout, copier, couper, coller, dupliquer | `Ctrl+A`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+D` |
 | Déplacer ou supprimer la sélection | flèches (`Maj` : ×10), `Suppr` |
+| Redimensionner | poignées des coins (images, texte et groupes gardent leurs proportions, les autres si `Maj`), poignées des côtés pour étirer |
+| Faire pivoter | rond au-dessus de la sélection ; `Maj` : par pas de 15° |
+| Retourner (miroir) | `Maj+H` (gauche-droite), `Maj+V` (haut-bas) ; le texte change de place mais reste lisible |
+| Allonger ou orienter une ligne, une flèche | poignées aux extrémités ; `Maj` pour angles à 45° |
+| Modifier un texte | double-clic dessus, ou clic avec l'outil Texte ; vidé, il est supprimé |
+| Rogner une image | double-clic ou `C` ; poignées pour les bords, glisser à l'intérieur pour choisir la partie gardée ; `Entrée` valide, `Échap` annule |
 | Stylo, surligneur, gomme | `P`, `S`, `G` |
 | Texte | `T`, puis clic ; `Entrée` ou `Échap` pour valider, `Maj+Entrée` pour aller à la ligne |
 | Ligne, flèche, rectangle, ellipse | `L`, `F`, `R`, `E` ; `Maj` pour angles à 45°, carrés et cercles |
@@ -68,7 +75,8 @@ dans le menu de l'icône (**Bouton de souris pour dessiner**).
 | Tout effacer | `Suppr` (sans sélection) |
 | Pointeur laser (trace qui s'efface) | `K` |
 | Projecteur (assombrit tout sauf autour du curseur ; molette pour la taille) | `O` |
-| Envoyer l'écran annoté au tableau | `Ctrl+B` (en mode dessin) |
+| Envoyer l'écran annoté au tableau | `Ctrl+B` ou bouton « arrière » de la souris (en mode dessin) |
+| Afficher ou réduire le tableau | bouton latéral « arrière » de la souris |
 
 Tout est aussi accessible depuis la barre d'outils, déplaçable en la faisant glisser.
 Au stylet, l'épaisseur du trait suit la pression.
@@ -90,6 +98,7 @@ Les tailles de trait et de texte sont celles affichées à l'écran : zoomer per
 Le tableau est sauvegardé en continu et rouvert tel quel ; `Ctrl+S` l'enregistre en plus dans un fichier `.overboard` (JSON).
 Un écran envoyé au tableau s'ajoute à droite du contenu : la capture en image, les annotations par-dessus, toujours modifiables.
 La gomme n'efface que les annotations, jamais les captures : pour en retirer une, la sélectionner (`V`) puis `Suppr`.
+Rogner une image ne fait que masquer ses bords : la rogner à nouveau permet de les retrouver.
 Copier sur l'écran puis coller sur le tableau fonctionne aussi.
 
 `Ctrl+C` place aussi la sélection en image dans le presse-papiers du système, à coller dans un document ou un message

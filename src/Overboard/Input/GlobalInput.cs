@@ -17,6 +17,7 @@ public sealed class GlobalInput : IDisposable
     private readonly SimpleGlobalHook _hook = new(null);
     private volatile bool _toggleHeld;
     private volatile int _toggleButton;
+    private volatile int _boardButton;
     private int _x;
     private int _y;
 
@@ -25,6 +26,7 @@ public sealed class GlobalInput : IDisposable
 
     public event Action? TogglePressed;
     public event Action? EscapePressed;
+    public event Action? BoardPressed;
     public event Action? Failed;
 
     public PixelPoint CursorPosition => new(Volatile.Read(ref _x), Volatile.Read(ref _y));
@@ -34,6 +36,13 @@ public sealed class GlobalInput : IDisposable
     {
         get => (MouseButton)_toggleButton;
         set => _toggleButton = (int)value;
+    }
+
+    /// <summary>Mouse button for the board, NoButton for none; the toggle button wins if both are the same. It never reaches applications.</summary>
+    public MouseButton BoardButton
+    {
+        get => (MouseButton)_boardButton;
+        set => _boardButton = (int)value;
     }
 
     public void Start()
@@ -74,20 +83,21 @@ public sealed class GlobalInput : IDisposable
         if (e.Data.KeyCode == KeyCode.VcD) _toggleHeld = false;
     }
 
-    private bool IsToggleButton(MouseHookEventArgs e) =>
-        e.Data.Button != MouseButton.NoButton && (int)e.Data.Button == _toggleButton;
+    private bool IsOwnButton(MouseHookEventArgs e) =>
+        e.Data.Button != MouseButton.NoButton && ((int)e.Data.Button == _toggleButton || (int)e.Data.Button == _boardButton);
 
     private void OnMousePressed(object? sender, MouseHookEventArgs e)
     {
-        if (!IsToggleButton(e)) return;
+        if (!IsOwnButton(e)) return;
         // Keep the button from reaching the application under the cursor (a browser would go forward).
         e.SuppressEvent = true;
-        Dispatcher.UIThread.Post(() => TogglePressed?.Invoke());
+        if ((int)e.Data.Button == _toggleButton) Dispatcher.UIThread.Post(() => TogglePressed?.Invoke());
+        else Dispatcher.UIThread.Post(() => BoardPressed?.Invoke());
     }
 
     private void OnMouseReleased(object? sender, MouseHookEventArgs e)
     {
-        if (IsToggleButton(e)) e.SuppressEvent = true;
+        if (IsOwnButton(e)) e.SuppressEvent = true;
     }
 
     private void OnMouseMoved(object? sender, MouseHookEventArgs e)

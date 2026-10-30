@@ -12,19 +12,26 @@ public sealed class AppSettings
     /// <summary>Mouse button that switches drawing mode on and off, from anywhere. NoButton for none.</summary>
     public MouseButton ToggleMouseButton { get; set; } = MouseButton.Button5;
 
+    /// <summary>Mouse button that shows the board or puts it away, from anywhere. NoButton for none.</summary>
+    public MouseButton BoardMouseButton { get; set; } = MouseButton.Button4;
+
     /// <summary>Whether to ask GitHub daily for a newer release: Overboard's only network access.</summary>
     public bool CheckForUpdates { get; set; } = true;
 
     public static AppSettings Load()
     {
+        AppSettings settings;
         try
         {
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllBytes(FilePath)) ?? new AppSettings();
+            settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllBytes(FilePath)) ?? new AppSettings();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
-            return new AppSettings();
+            settings = new AppSettings();
         }
+        // Drawing keeps its button when settings from before the board button chose the same one.
+        if (settings.BoardMouseButton == settings.ToggleMouseButton) settings.BoardMouseButton = MouseButton.NoButton;
+        return settings;
     }
 
     public void Save()

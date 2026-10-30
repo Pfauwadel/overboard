@@ -27,7 +27,9 @@ public static class InkShortcuts
             _ => 0,
         };
 
-        Tool? tool = command ? null : e.Key switch
+        // Shift+H and Shift+V mirror the selection (V alone is the selection tool).
+        var flip = !command && shift && e.Key is Key.H or Key.V;
+        Tool? tool = command || flip ? null : e.Key switch
         {
             Key.P => Tool.Pen,
             Key.S => Tool.Highlighter,
@@ -54,6 +56,7 @@ public static class InkShortcuts
         };
 
         if (tool is { } selected) settings.Tool = selected;
+        else if (flip) canvas.Flip(horizontal: e.Key == Key.H);
         else if (digit > 0 && !command) settings.Color = ToolSettings.Palette[digit - 1];
         else if (command && e.Key == Key.Z && !shift) canvas.Undo();
         else if (command && (e.Key == Key.Y || (e.Key == Key.Z && shift))) canvas.Redo();
@@ -63,6 +66,8 @@ public static class InkShortcuts
         else if (command && e.Key == Key.V) canvas.Paste();
         else if (command && e.Key == Key.D) canvas.Duplicate();
         else if (nudge is { } offset && canvas.HasSelection) canvas.Nudge(offset);
+        else if (!command && e.Key == Key.C && canvas.CanCrop) canvas.StartCrop();
+        else if (e.Key == Key.Enter && canvas.IsCropping) canvas.EndCrop(keep: true);
         // Delete removes the selection if there is one, otherwise everything.
         else if (e.Key is Key.Delete or Key.Back)
         {

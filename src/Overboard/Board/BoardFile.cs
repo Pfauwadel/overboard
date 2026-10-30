@@ -21,7 +21,8 @@ public static class BoardFile
 {
     public const string Extension = ".overboard";
     private const string Format = "overboard";
-    private const int Version = 1;
+    /// <summary>Version 2 adds element transforms and picture cropping; boards without them are still written as version 1.</summary>
+    private const int Version = 2;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -34,14 +35,16 @@ public static class BoardFile
     /// <summary>Writes to a temporary file first, so a failure never leaves a truncated board.</summary>
     public static void Write(string path, BoardContent content, BoardSession? session = null)
     {
+        List<ElementDto> elements = [.. content.Elements.Select(ToDto)];
         var file = new FileDto
         {
             Format = Format,
-            Version = Version,
+            // Earlier versions can still read boards that do not use what they lack.
+            Version = elements.Any(e => e.Transform != null || e is ImageDto { Crop: not null }) ? Version : 1,
             Background = content.Dark ? "dark" : "light",
             Grid = content.Grid,
             View = new ViewDto { X = Round(content.Offset.X), Y = Round(content.Offset.Y), Zoom = Math.Round(content.Zoom, 4) },
-            Elements = [.. content.Elements.Select(ToDto)],
+            Elements = elements,
             Session = session is null ? null : new SessionDto { Path = session.FilePath, Modified = session.Modified },
         };
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
@@ -71,7 +74,23 @@ public static class BoardFile
         }
     }
 
-    private static ElementDto ToDto(InkElement element) => element switch
+    private static ElementDto ToDto(InkElement element)
+    {
+        var dto = ElementToDto(element);
+        var m = element.Placement;
+        if (!m.IsIdentity)
+            dto.Transform = [Math.Round(m.M11, 6), Math.Round(m.M12, 6), Math.Round(m.M21, 6), Math.Round(m.M22, 6), Round(m.M31), Round(m.M32)];
+        return dto;
+    }
+
+    private static InkElement FromDto(ElementDto dto) => ElementFromDto(dto, dto.Transform switch
+    {
+        null => Matrix.Identity,
+        [var m11, var m12, var m21, var m22, var m31, var m32] => new Matrix(m11, m12, m21, m22, m31, m32),
+        _ => throw new FormatException("Transformation attendue : [m11, m12, m21, m22, x, y]"),
+    });
+
+    private static ElementDto ElementToDto(InkElement element) => element switch
     {
         StrokeElement s => new StrokeDto
         {
@@ -100,20 +119,30 @@ public static class BoardFile
         },
         ImageElement i => new ImageDto
         {
-            Origin = Pair(i.Bounds.Position),
-            Size = [Round(i.Bounds.Width), Round(i.Bounds.Height)],
+            Origin = Pair(i.Frame.Position),
+            Size = [Round(i.Frame.Width), Round(i.Frame.Height)],
+            Crop = i.Crop == ImageElement.Uncropped
+                ? null
+                : [Math.Round(i.Crop.X, 6), Math.Round(i.Crop.Y, 6), Math.Round(i.Crop.Width, 6), Math.Round(i.Crop.Height, 6)],
             Png = i.Png,
         },
         _ => throw new NotSupportedException(element.GetType().Name),
     };
 
-    private static InkElement FromDto(ElementDto dto) => dto switch
+    private static InkElement ElementFromDto(ElementDto dto, Matrix placement) => dto switch
     {
         StrokeDto s => new StrokeElement(
-            Stroke.FromPoints(Color.Parse(s.Color!), s.Size, s.Pressure, StrokePoints(s.Points, s.Pressure)), s.Opacity),
-        ShapeDto s => new ShapeElement(s.Kind, ToPoint(s.Start), ToPoint(s.End), Color.Parse(s.Color!), s.Thickness),
-        TextDto t => new TextElement(t.Text, ToPoint(t.Origin), Color.Parse(t.Color!), t.FontSize),
-        ImageDto i => new ImageElement(new Bitmap(new MemoryStream(i.Png)), new Rect(ToPoint(i.Origin), ToSize(i.Size)), i.Png),
+            Stroke.FromPoints(Color.Parse(s.Color!), s.Size, s.Pressure, StrokePoints(s.Points, s.Pressure)), s.Opacity, placement),
+        ShapeDto s => new ShapeElement(s.Kind, ToPoint(s.Start), ToPoint(s.End), Color.Parse(s.Color!), s.Thickness, placement),
+        TextDto t => new TextElement(t.Text, ToPoint(t.Origin), Color.Parse(t.Color!), t.FontSize, placement),
+        ImageDto i => new ImageElement(new Bitmap(new MemoryStream(i.Png)), new Rect(ToPoint(i.Origin), ToSize(i.Size)),
+            i.Crop switch
+            {
+                null => ImageElement.Uncropped,
+                [var x, var y, var width, var height] when width > 0 && height > 0 => new Rect(x, y, width, height),
+                _ => throw new FormatException("Recadrage attendu : [x, y, largeur, hauteur], en fractions de l'image"),
+            },
+            placement, i.Png),
         _ => throw new NotSupportedException(dto.GetType().Name),
     };
 
@@ -168,6 +197,9 @@ public static class BoardFile
     private abstract class ElementDto
     {
         public string? Color { get; set; }
+
+        /// <summary>Rotation and scale given to the element, as a matrix from its own coordinates to the board; none if absent.</summary>
+        public double[]? Transform { get; set; }
     }
 
     /// <summary>A picture: PNG bytes, written as base64.</summary>
@@ -175,6 +207,9 @@ public static class BoardFile
     {
         public double[] Origin { get; set; } = [];
         public double[] Size { get; set; } = [];
+
+        /// <summary>The part of the picture shown at <see cref="Origin"/>, as fractions of its size; all of it if absent.</summary>
+        public double[]? Crop { get; set; }
         public byte[] Png { get; set; } = [];
     }
 

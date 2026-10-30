@@ -30,6 +30,9 @@ public sealed class OverlayManager(ToolSettings settings, Func<PixelPoint> curso
     /// <summary>Raised with the screens sent to the board.</summary>
     public event Action<IReadOnlyList<ScreenCapture>>? Captured;
 
+    /// <summary>Raised when the board is asked for from drawing mode, once drawing mode is left.</summary>
+    public event Action? BoardRequested;
+
     public void Initialize()
     {
         _probe = new Window();
@@ -66,11 +69,13 @@ public sealed class OverlayManager(ToolSettings settings, Func<PixelPoint> curso
         ActiveChanged?.Invoke();
     }
 
-    /// <summary>Escape validates the text being typed, otherwise leaves drawing mode.</summary>
+    /// <summary>Escape validates the text being typed, cancels cropping, otherwise leaves drawing mode.</summary>
     public void HandleEscape()
     {
         var editing = _windows.FirstOrDefault(w => w.Canvas.IsEditingText);
+        var cropping = _windows.FirstOrDefault(w => w.Canvas.IsCropping);
         if (editing != null) editing.Canvas.CommitText();
+        else if (cropping != null) cropping.Canvas.EndCrop(keep: false);
         else Deactivate();
     }
 
@@ -105,6 +110,13 @@ public sealed class OverlayManager(ToolSettings settings, Func<PixelPoint> curso
         Captured?.Invoke([.. annotated.Select(a => new ScreenCapture(ScreenGrabber.Grab(a.ScreenBounds, a.ScreenScaling), a.Size, a.Elements))]);
     }
 
+    /// <summary>Leaves drawing mode, without keeping the annotations, for the board.</summary>
+    public void OpenBoard()
+    {
+        Deactivate();
+        BoardRequested?.Invoke();
+    }
+
     public void Shutdown()
     {
         foreach (var window in _windows) window.Close();
@@ -119,6 +131,6 @@ public sealed class OverlayManager(ToolSettings settings, Func<PixelPoint> curso
         foreach (var window in _windows) window.Close();
         _windows.Clear();
         foreach (var screen in _probe!.Screens.All)
-            _windows.Add(new OverlayWindow(screen.Bounds, screen.Scaling, settings, Deactivate, SendToBoard));
+            _windows.Add(new OverlayWindow(screen.Bounds, screen.Scaling, settings, Deactivate, SendToBoard, OpenBoard));
     }
 }

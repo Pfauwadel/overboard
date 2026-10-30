@@ -66,13 +66,30 @@ public sealed class InkCanvas : Control
     private HashSet<InkElement> _bandKeeps = [];
     private bool _moving;
     private Vector _moveOffset;
-    private bool _hoverSelectable;
+    // Resizing or rotating the selection: the handle held, the frame when it started, and the elements as they would become.
+    private Handle _handle;
+    private SelectionFrame _handleFrame;
+    private Matrix _handleTransform = Matrix.Identity;
+    private Dictionary<InkElement, InkElement>? _transformed;
+    // Cropping a picture: the picture, the part of it kept (in its own coordinates), and the gesture in progress.
+    private ImageElement? _cropping;
+    private Rect _cropFrame;
+    private Rect _cropFrom;
+    private Handle _cropHandle;
+    private bool _cropDragging;
+    // Double-clicked with the selection tool: cropped (pictures) or edited (text) on release, unless dragged.
+    private InkElement? _doubleClicked;
+    // What the pointer would grab with the selection tool: an element, a handle; null for nothing.
+    private Cursor? _hoverCursor;
+    private static readonly Dictionary<StandardCursorType, Cursor> HandleCursors = [];
     // Shared by every canvas: copy on the screen, paste on the board.
     private static IReadOnlyList<InkElement> _clipboard = [];
     // What Copy last put on the system clipboard: while it is still there, pasting uses _clipboard.
     private static IAsyncDataTransfer? _systemClipboard;
 
     private TextBox? _editor;
+    // Text being changed in the editor: hidden meanwhile.
+    private TextElement? _editing;
     private Point _editorPosition;
     private Color _editorColor;
     private double _editorFontSize;
@@ -203,6 +220,7 @@ public sealed class InkCanvas : Control
     public void Undo()
     {
         CommitText();
+        EndCrop(keep: false);
         if (!_undo.TryPop(out var previous)) return;
         _redo.Push(_elements);
         _elements = previous;
@@ -214,6 +232,7 @@ public sealed class InkCanvas : Control
     public void Redo()
     {
         CommitText();
+        EndCrop(keep: false);
         if (!_redo.TryPop(out var next)) return;
         _undo.Push(_elements);
         _elements = next;
@@ -226,6 +245,7 @@ public sealed class InkCanvas : Control
     public void Clear()
     {
         CommitText();
+        EndCrop(keep: false);
         if (_elements.Count == 0) return;
         PushUndo();
         _elements.Clear();
@@ -241,6 +261,14 @@ public sealed class InkCanvas : Control
         _elements = [];
         _selection.Clear();
         _band = null;
+        _moving = false;
+        _moveOffset = default;
+        _handle = Handle.None;
+        _handleTransform = Matrix.Identity;
+        _transformed = null;
+        _cropping = null;
+        _cropDragging = false;
+        _doubleClicked = null;
         _undo.Clear();
         _redo.Clear();
         _gesture = null;
@@ -308,7 +336,8 @@ public sealed class InkCanvas : Control
         switch (tool)
         {
             case Tool.Text:
-                StartText(point.Position);
+                // On existing text: edits it.
+                StartText(point.Position, ElementAt(position) as TextElement);
                 return;
             case Tool.Pen:
                 StartStroke(new Stroke(_settings.Color, _settings.Size / _zoom, e.Pointer.Type == PointerType.Pen, StrokePrecision / _zoom),
@@ -330,7 +359,7 @@ public sealed class InkCanvas : Control
             case Tool.Spotlight:
                 return;
             case Tool.Select:
-                StartSelect(position, e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+                StartSelect(position, e.KeyModifiers.HasFlag(KeyModifiers.Shift), e.ClickCount);
                 break;
             default:
                 _start = position;
@@ -359,13 +388,22 @@ public sealed class InkCanvas : Control
     }
 
     /// <summary>
-    /// Clicking an element selects it (Shift: adds or removes it) and starts moving the selection;
-    /// clicking elsewhere starts a rubber band, which selects the elements it fully encloses.
+    /// A handle resizes or rotates the selection, or moves an end of a line. Clicking an element selects it
+    /// (Shift: adds or removes it) and starts moving the selection; double-clicking a picture crops it,
+    /// double-clicking text edits it. Clicking elsewhere starts a rubber band, which selects the elements it fully encloses.
     /// </summary>
-    private void StartSelect(Point position, bool adding)
+    private void StartSelect(Point position, bool adding, int clicks)
     {
         _selectFrom = position;
         _moveOffset = default;
+        if (_cropping != null && StartCropGesture(position, clicks)) return;
+        // Handles first, even with Shift held: it keeps proportions or snaps the angle.
+        if (HandleAt(position) is var handle and not Handle.None)
+        {
+            _handle = handle;
+            _handleFrame = SelectionFrame.Of(Selected()) ?? default;
+            return;
+        }
         var hit = ElementAt(position);
         if (hit is null)
         {
@@ -378,11 +416,47 @@ public sealed class InkCanvas : Control
         if (!adding && !_selection.Contains(hit)) _selection.Clear();
         _selection.Add(hit);
         _moving = true;
+        // Unless the second click drags it: a click then a quick move still moves.
+        _doubleClicked = clicks == 2 && !adding && hit is ImageElement or TextElement ? hit : null;
     }
 
-    private void DragSelect(Point position)
+    /// <summary>The handle of the selection under <paramref name="position"/>: an end of a single line or arrow, else the frame's.</summary>
+    private Handle HandleAt(Point position)
     {
-        if (_band != null)
+        var selected = Selected();
+        if (selected is [ShapeElement { IsLine: true } line])
+            return SelectionFrame.Grabs(line.End, position, _zoom) ? Handle.End
+                : SelectionFrame.Grabs(line.Start, position, _zoom) ? Handle.Start
+                : Handle.None;
+        return SelectionFrame.Of(selected) is { } frame ? frame.HandleAt(position, _zoom, rotate: true) : Handle.None;
+    }
+
+    /// <summary>Whether resizing by a corner keeps the proportions, before Shift: for pictures, text and several elements.</summary>
+    private bool KeepsProportions => _selection.Count > 1 || _selection.Any(e => e.KeepsProportions);
+
+    private void DragSelect(Point position, KeyModifiers modifiers)
+    {
+        var shift = modifiers.HasFlag(KeyModifiers.Shift);
+        if (_cropDragging)
+        {
+            DragCrop(position);
+        }
+        else if (_handle is Handle.Start or Handle.End && Selected() is [ShapeElement line])
+        {
+            // Shift: 45° angles from the other end.
+            var other = _handle == Handle.Start ? line.End : line.Start;
+            var end = shift ? ShapeElement.Constrain(line.Kind, other, position) : position;
+            _transformed = new() { [line] = _handle == Handle.Start ? line.WithEnds(end, line.End) : line.WithEnds(line.Start, end) };
+        }
+        else if (_handle != Handle.None)
+        {
+            var transform = _handle == Handle.Rotate
+                ? _handleFrame.Rotate(_selectFrom, position, snap: shift)
+                : _handleFrame.Resize(_handle, position, SelectionFrame.IsCorner(_handle) && KeepsProportions != shift, 8 / _zoom);
+            _handleTransform = transform;
+            _transformed = Selected().ToDictionary(e => e, e => e.Transform(transform));
+        }
+        else if (_band != null)
         {
             var band = new Rect(_selectFrom, position);
             _band = band;
@@ -399,35 +473,88 @@ public sealed class InkCanvas : Control
     private void EndSelect()
     {
         var offset = _moveOffset;
+        var replaced = _handle != Handle.None ? _transformed : null;
+        var doubleClicked = _doubleClicked;
+        _doubleClicked = null;
         _band = null;
         _moving = false;
         _moveOffset = default;
+        _handle = Handle.None;
+        _handleTransform = Matrix.Identity;
+        _transformed = null;
+        _cropDragging = false;
         if (offset != default) MoveSelection(offset);
+        else if (replaced != null) ReplaceSelection(replaced);
+        else if (doubleClicked is ImageElement image) StartCrop(image);
+        else if (doubleClicked is TextElement text) StartText(default, text);
     }
 
+    /// <summary>Shows what the selection tool would grab under <paramref name="position"/>: a handle, an element, the part of a picture kept.</summary>
     private void UpdateHover(Point position)
     {
-        var selectable = ElementAt(position) != null;
-        if (selectable == _hoverSelectable) return;
-        _hoverSelectable = selectable;
+        Cursor? cursor;
+        if (_cropping is { } image)
+        {
+            var frame = new SelectionFrame(_cropFrame, image.Placement, Sides: true);
+            var handle = frame.HandleAt(position, _zoom, rotate: false);
+            cursor = handle != Handle.None ? HandleCursor(handle) : frame.Contains(position) ? _panCursor : null;
+        }
+        else
+        {
+            var handle = HandleAt(position);
+            cursor = handle != Handle.None ? HandleCursor(handle) : ElementAt(position) != null ? _panCursor : null;
+        }
+        if (cursor == _hoverCursor) return;
+        _hoverCursor = cursor;
         ApplyCursor();
     }
 
-    /// <summary>Replaces the selected elements by moved copies, in place, as one undoable step.</summary>
-    private void MoveSelection(Vector offset)
+    private static Cursor HandleCursor(Handle handle)
+    {
+        var type = handle switch
+        {
+            Handle.TopLeft => StandardCursorType.TopLeftCorner,
+            Handle.TopRight => StandardCursorType.TopRightCorner,
+            Handle.BottomRight => StandardCursorType.BottomRightCorner,
+            Handle.BottomLeft => StandardCursorType.BottomLeftCorner,
+            Handle.Top => StandardCursorType.TopSide,
+            Handle.Bottom => StandardCursorType.BottomSide,
+            Handle.Left => StandardCursorType.LeftSide,
+            Handle.Right => StandardCursorType.RightSide,
+            Handle.Start or Handle.End => StandardCursorType.Cross,
+            _ => StandardCursorType.Hand,
+        };
+        if (!HandleCursors.TryGetValue(type, out var cursor)) HandleCursors[type] = cursor = new Cursor(type);
+        return cursor;
+    }
+
+    private void MoveSelection(Vector offset) => TransformSelection(Matrix.CreateTranslation(offset));
+
+    private void TransformSelection(Matrix transform)
+    {
+        EndCrop(keep: true);
+        ReplaceSelection(Selected().ToDictionary(e => e, e => e.Transform(transform)));
+    }
+
+    /// <summary>Replaces selected elements, in place, as one undoable step; the replacements are selected.</summary>
+    private void ReplaceSelection(Dictionary<InkElement, InkElement> replacements)
     {
         PushUndo();
-        var moved = new HashSet<InkElement>();
         for (var i = 0; i < _elements.Count; i++)
         {
-            if (!_selection.Contains(_elements[i])) continue;
-            _elements[i] = _elements[i].Translate(offset);
-            moved.Add(_elements[i]);
+            if (replacements.TryGetValue(_elements[i], out var replacement)) _elements[i] = replacement;
         }
-        _selection.Clear();
-        _selection.UnionWith(moved);
+        _selection.ExceptWith(replacements.Keys);
+        _selection.UnionWith(replacements.Values);
         InvalidateVisual();
         Changed?.Invoke();
+    }
+
+    /// <summary>Mirrors the selection across its middle: left and right, or top and bottom. Text stays readable.</summary>
+    public void Flip(bool horizontal)
+    {
+        EndCrop(keep: true);
+        if (SelectionFrame.Of(Selected()) is { } frame) TransformSelection(frame.Flip(horizontal));
     }
 
     /// <summary>Moves the selection by an on-screen distance (arrow keys).</summary>
@@ -436,9 +563,84 @@ public sealed class InkCanvas : Control
         if (HasSelection) MoveSelection(screenOffset / _zoom);
     }
 
+    public bool IsCropping => _cropping != null;
+
+    /// <summary>Whether the selection is a single picture, which can be cropped.</summary>
+    public bool CanCrop => _cropping is null && _selection.Count == 1 && _selection.Single() is ImageElement;
+
+    /// <summary>Crops the selected picture: its edges get handles, and what is cut off shows faded.</summary>
+    public void StartCrop()
+    {
+        if (CanCrop) StartCrop((ImageElement)_selection.Single());
+    }
+
+    private void StartCrop(ImageElement image)
+    {
+        CommitText();
+        _cropping = image;
+        _cropFrame = image.Frame;
+        _hoverCursor = null;
+        ApplyCursor();
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// While cropping: a handle moves the edges, inside moves the part kept. A double-click, or a click
+    /// elsewhere, ends cropping. Returns whether the click was for cropping.
+    /// </summary>
+    private bool StartCropGesture(Point position, int clicks)
+    {
+        var frame = new SelectionFrame(_cropFrame, _cropping!.Placement, Sides: true);
+        var handle = frame.HandleAt(position, _zoom, rotate: false);
+        var inside = handle != Handle.None || frame.Contains(position);
+        if (inside && clicks < 2)
+        {
+            _cropHandle = handle;
+            _cropFrom = _cropFrame;
+            _cropDragging = true;
+            return true;
+        }
+        EndCrop(keep: true);
+        return inside;
+    }
+
+    private void DragCrop(Point position)
+    {
+        var image = _cropping!;
+        if (!image.Placement.TryInvert(out var toImage)) return;
+        var full = image.FullFrame;
+        var point = position.Transform(toImage);
+        if (_cropHandle == Handle.None)
+        {
+            // The part kept slides over the picture, without leaving it.
+            var moved = _cropFrom.Translate(point - _selectFrom.Transform(toImage));
+            _cropFrame = moved.Translate(new Vector(
+                Math.Clamp(moved.X, full.Left, full.Right - moved.Width) - moved.X,
+                Math.Clamp(moved.Y, full.Top, full.Bottom - moved.Height) - moved.Y));
+        }
+        else
+        {
+            var min = 8 / _zoom / Math.Max(Math.Sqrt(Math.Abs(image.Placement.GetDeterminant())), 1e-12);
+            _cropFrame = SelectionFrame.MoveSides(_cropFrom, _cropHandle, point, full, min);
+        }
+    }
+
+    /// <summary>Ends cropping, keeping the new edges as one undoable step, or not.</summary>
+    public void EndCrop(bool keep)
+    {
+        if (_cropping is not { } image) return;
+        _cropping = null;
+        _cropDragging = false;
+        _hoverCursor = null;
+        ApplyCursor();
+        InvalidateVisual();
+        if (keep && _cropFrame != image.Frame) Replace(image, image.WithFrame(_cropFrame));
+    }
+
     public void SelectAll()
     {
         CommitText();
+        EndCrop(keep: true);
         _settings.Tool = Tool.Select;
         _selection.UnionWith(_elements);
         InvalidateVisual();
@@ -446,12 +648,14 @@ public sealed class InkCanvas : Control
 
     public void ClearSelection()
     {
+        EndCrop(keep: true);
         _selection.Clear();
         InvalidateVisual();
     }
 
     public void DeleteSelection()
     {
+        EndCrop(keep: false);
         if (!HasSelection) return;
         PushUndo();
         _elements.RemoveAll(_selection.Contains);
@@ -587,6 +791,7 @@ public sealed class InkCanvas : Control
     private void AddSelected(List<InkElement> elements)
     {
         CommitText();
+        EndCrop(keep: true);
         _settings.Tool = Tool.Select;
         Add(elements);
         _selection.Clear();
@@ -619,7 +824,7 @@ public sealed class InkCanvas : Control
                 if (_settings.Tool == Tool.Select) UpdateHover(ToBoard(_pointer.Value));
                 return;
             case Tool.Select:
-                DragSelect(ToBoard(e.GetPosition(this)));
+                DragSelect(ToBoard(e.GetPosition(this)), e.KeyModifiers);
                 break;
             case Tool.Pen or Tool.Highlighter:
                 // Intermediate points: every sample since the last event, not one per frame.
@@ -755,11 +960,16 @@ public sealed class InkCanvas : Control
 
     private static double Distance(Point a, Point b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
 
-    /// <summary>Opens a text box at <paramref name="position"/>, in control coordinates.</summary>
-    private void StartText(Point position)
+    /// <summary>
+    /// Opens a text box at <paramref name="position"/>, in control coordinates, or over <paramref name="existing"/>
+    /// text to change it (shown unturned while typing, at its size on screen).
+    /// </summary>
+    private void StartText(Point position, TextElement? existing = null)
     {
-        _editorColor = _settings.Color;
-        _editorFontSize = _settings.FontSize;
+        CommitText();
+        _editing = existing;
+        _editorColor = existing?.Color ?? _settings.Color;
+        _editorFontSize = existing is null ? _settings.FontSize : existing.FontSize * existing.Scale * _zoom;
         var brush = new SolidColorBrush(ToolSettings.Display(_editorColor, _darkBackground));
         var editor = new TextBox
         {
@@ -782,8 +992,20 @@ public sealed class InkCanvas : Control
             editor.Resources[key] = outline;
         editor.Resources["TextControlBorderThemeThicknessFocused"] = new Thickness(1);
 
-        // Center the first line on the click.
-        _editorPosition = new Point(position.X - 5, position.Y - _editorFontSize * 0.7 - 3);
+        if (existing is null)
+        {
+            // Center the first line on the click.
+            _editorPosition = new Point(position.X - 5, position.Y - _editorFontSize * 0.7 - 3);
+        }
+        else
+        {
+            // The text where it was drawn, past the box's border and padding.
+            var origin = existing.Origin.Transform(existing.Placement);
+            _editorPosition = new Point(origin.X * _zoom + _offset.X - 5, origin.Y * _zoom + _offset.Y - 3);
+            editor.Text = existing.Text;
+            editor.CaretIndex = existing.Text.Length;
+            InvalidateVisual();
+        }
         editor.AddHandler(KeyDownEvent, OnEditorKeyDown, RoutingStrategies.Tunnel);
         editor.LostFocus += (_, _) => CommitText();
         editor.Loaded += (_, _) => editor.Focus();
@@ -821,13 +1043,19 @@ public sealed class InkCanvas : Control
         }
     }
 
-    /// <summary>Turns the text being typed into a text element.</summary>
+    /// <summary>Turns the text being typed into a text element, or changes the text being edited (removed if emptied).</summary>
     public void CommitText()
     {
         if (_editor is not { } editor) return;
         _editor = null;
         var text = editor.Text?.TrimEnd() ?? "";
-        if (text.Length > 0)
+        if (_editing is { } existing)
+        {
+            _editing = null;
+            if (text != existing.Text) Replace(existing, text.Length > 0 ? existing.WithText(text) : null);
+            InvalidateVisual();
+        }
+        else if (text.Length > 0)
         {
             // Place the element exactly where the editor displayed the text.
             var presenter = editor.GetVisualDescendants().OfType<TextPresenter>().FirstOrDefault();
@@ -842,7 +1070,21 @@ public sealed class InkCanvas : Control
     {
         if (_editor is not { } editor) return;
         _editor = null;
+        _editing = null;
         RemoveEditor(editor);
+    }
+
+    /// <summary>Replaces an element, or removes it if <paramref name="replacement"/> is null, as one undoable step.</summary>
+    private void Replace(InkElement element, InkElement? replacement)
+    {
+        var index = _elements.IndexOf(element);
+        if (index < 0) return;
+        PushUndo();
+        if (replacement is null) _elements.RemoveAt(index);
+        else _elements[index] = replacement;
+        if (_selection.Remove(element) && replacement != null) _selection.Add(replacement);
+        InvalidateVisual();
+        Changed?.Invoke();
     }
 
     public override void Render(DrawingContext context)
@@ -854,11 +1096,18 @@ public sealed class InkCanvas : Control
         {
             foreach (var element in _elements)
             {
-                // The selection being moved is drawn at its new place.
+                if (element == _cropping)
+                {
+                    RenderCropping(context);
+                    continue;
+                }
+                if (element == _editing) continue;
+                // The selection being moved, resized or rotated is drawn as it will be.
+                var shown = _transformed?.GetValueOrDefault(element) ?? element;
                 var offset = _moveOffset != default && _selection.Contains(element) ? _moveOffset : default;
-                if (!element.Bounds.Translate(offset).Intersects(visible)) continue;
+                if (!shown.Bounds.Translate(offset).Intersects(visible)) continue;
                 using (context.PushTransform(Matrix.CreateTranslation(offset)))
-                    element.Render(context, _darkBackground);
+                    shown.Render(context, _darkBackground);
             }
             _preview?.Render(context, _darkBackground);
             RenderLaser(context);
@@ -867,17 +1116,49 @@ public sealed class InkCanvas : Control
         if (_settings.Tool == Tool.Spotlight) RenderSpotlight(context);
     }
 
-    /// <summary>A dashed frame around each selected element, and the rubber band.</summary>
+    /// <summary>The picture being cropped: whole and faded, with the part kept on top.</summary>
+    private void RenderCropping(DrawingContext context)
+    {
+        var image = _cropping!;
+        using (context.PushOpacity(0.35))
+            image.WithFrame(image.FullFrame).Render(context, _darkBackground);
+        image.WithFrame(_cropFrame).Render(context, _darkBackground);
+    }
+
+    /// <summary>
+    /// The selection frame and its handles, a dashed frame around each element when several are selected,
+    /// and the rubber band. While cropping, the picture's edges and the handles of the part kept.
+    /// </summary>
     private void RenderSelection(DrawingContext context)
     {
-        if (_selection.Count == 0 && _band is null) return;
         var accent = Color.Parse(_darkBackground ? "#60a5fa" : "#2563eb");
-        var frame = new ImmutablePen(new ImmutableSolidColorBrush(accent), 1.25 / _zoom, new ImmutableDashStyle([4, 3], 0));
-        var padding = 4 / _zoom;
-        foreach (var element in _selection)
-            context.DrawRectangle(null, frame, element.Bounds.Translate(_moveOffset).Inflate(padding));
+        var dashed = new ImmutablePen(new ImmutableSolidColorBrush(accent), 1.25 / _zoom, new ImmutableDashStyle([4, 3], 0));
+        if (_cropping is { } image)
+        {
+            context.DrawGeometry(null, dashed, new SelectionFrame(image.FullFrame, image.Placement, false).Outline());
+            new SelectionFrame(_cropFrame, image.Placement, Sides: true).Render(context, _zoom, accent, rotate: false);
+            return;
+        }
+        if ((_selection.Count == 0 && _band is null) || _editing != null) return;
+        var gesture = _moveOffset != default ? Matrix.CreateTranslation(_moveOffset) : _handleTransform;
+        var selected = Selected();
+        if (_band is null && selected is [ShapeElement { IsLine: true } line])
+        {
+            // A line or arrow: a handle at each end.
+            var shown = (ShapeElement)(_transformed?.GetValueOrDefault(line) ?? line);
+            SelectionFrame.RenderHandle(context, shown.Start + _moveOffset, _zoom, accent, round: true);
+            SelectionFrame.RenderHandle(context, shown.End + _moveOffset, _zoom, accent, round: true);
+            return;
+        }
+        if (selected.Count > 1)
+        {
+            foreach (var element in selected)
+                context.DrawGeometry(null, dashed, new SelectionFrame(element.Frame, element.Placement, false).Transform(gesture).Outline());
+        }
         if (_band is { } band)
             context.DrawRectangle(new ImmutableSolidColorBrush(accent, 0.08), new ImmutablePen(new ImmutableSolidColorBrush(accent, 0.7), 1 / _zoom), band);
+        else if (SelectionFrame.Of(selected) is { } frame)
+            frame.Transform(gesture).Render(context, _zoom, accent, rotate: true);
     }
 
     /// <summary>A red glow with a bright core, thinning and fading along the trail.</summary>
@@ -953,8 +1234,9 @@ public sealed class InkCanvas : Control
         // The selection only shows, and only applies, with the selection tool.
         if (_settings.Tool != Tool.Select)
         {
+            EndCrop(keep: true);
             _selection.Clear();
-            _hoverSelectable = false;
+            _hoverCursor = null;
         }
         ApplyCursor();
         previous?.Dispose();
@@ -963,7 +1245,7 @@ public sealed class InkCanvas : Control
     }
 
     private void ApplyCursor() =>
-        Cursor = _panFrom != null || _panKeyHeld || (_hoverSelectable && _settings.Tool == Tool.Select) ? _panCursor : _cursor;
+        Cursor = _panFrom != null || _panKeyHeld ? _panCursor : _settings.Tool == Tool.Select ? _hoverCursor ?? _cursor : _cursor;
 
     private readonly record struct LaserPoint(Point Position, long Time);
 }

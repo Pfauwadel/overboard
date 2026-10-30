@@ -174,7 +174,12 @@ public sealed class BoardWindow : Window
     private void ScheduleAutosave()
     {
         _pendingAutosave?.Dispose();
-        _pendingAutosave = DispatcherTimer.RunOnce(SaveSession, AutosaveDelay);
+        _pendingAutosave = DispatcherTimer.RunOnce(() =>
+        {
+            // Saving validates the text being typed: wait until it is done.
+            if (_canvas.IsEditingText) ScheduleAutosave();
+            else SaveSession();
+        }, AutosaveDelay);
     }
 
     /// <summary>Writes the autosave now.</summary>
@@ -388,6 +393,7 @@ public sealed class BoardWindow : Window
         else if (command && e.Key is Key.Add or Key.OemPlus) _canvas.ZoomBy(1.25);
         else if (command && e.Key is Key.Subtract or Key.OemMinus) _canvas.ZoomBy(0.8);
         else if (!command && e.Key == Key.B) ToggleDark();
+        else if (e.Key == Key.Escape && _canvas.IsCropping) _canvas.EndCrop(keep: false);
         else if (e.Key == Key.Escape) _canvas.ClearSelection();
         else if (!InkShortcuts.Handle(e, _settings, _canvas))
         {

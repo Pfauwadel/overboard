@@ -46,8 +46,9 @@ public sealed class App : Application
                 ShowBoard();
                 _board!.AddCaptures(captures);
             };
-            _input.ToggleButton = _preferences.ToggleMouseButton;
+            _overlays.BoardRequested += ShowBoard;
             _input.TogglePressed += _overlays.Toggle;
+            _input.BoardPressed += ToggleBoard;
             _input.EscapePressed += _overlays.HandleEscape;
             _input.Failed += () => _tray?.ToolTipText = $"Overboard : raccourci {GlobalInput.ToggleLabel} indisponible";
 
@@ -122,7 +123,7 @@ public sealed class App : Application
             Menu =
             [
                 _toggleItem, boardItem, new NativeMenuItemSeparator(),
-                CreateMouseButtonMenu(), autostartItem, updatesItem, new NativeMenuItemSeparator(),
+                .. CreateMouseButtonMenus(), autostartItem, updatesItem, new NativeMenuItemSeparator(),
                 versionItem, quitItem,
             ],
         };
@@ -166,8 +167,11 @@ public sealed class App : Application
         _tray.ToolTipText = $"Overboard : version {release.Version} disponible";
     }
 
-    /// <summary>Choice of the mouse button that toggles drawing mode, remembered between runs.</summary>
-    private NativeMenuItem CreateMouseButtonMenu()
+    /// <summary>
+    /// Choice of the mouse buttons that toggle drawing mode and the board, remembered between runs.
+    /// A button does one thing: choosing it for one frees it from the other.
+    /// </summary>
+    private NativeMenuItem[] CreateMouseButtonMenus()
     {
         (MouseButton Button, string Label)[] choices =
         [
@@ -175,26 +179,52 @@ public sealed class App : Application
             (MouseButton.Button4, "Bouton latéral arrière"),
             (MouseButton.Button5, "Bouton latéral avant"),
         ];
-        var menu = new NativeMenu();
-        var items = new List<(MouseButton Button, NativeMenuItem Item)>();
-        foreach (var (button, label) in choices)
+        var items = new List<(bool Board, MouseButton Button, NativeMenuItem Item)>();
+        void Refresh()
         {
-            var item = new NativeMenuItem(label)
-            {
-                ToggleType = MenuItemToggleType.Radio,
-                IsChecked = button == _preferences.ToggleMouseButton,
-            };
-            item.Click += (_, _) =>
-            {
-                _preferences.ToggleMouseButton = button;
-                _preferences.Save();
-                _input.ToggleButton = button;
-                foreach (var (other, otherItem) in items) otherItem.IsChecked = other == button;
-            };
-            items.Add((button, item));
-            menu.Items.Add(item);
+            _input.ToggleButton = _preferences.ToggleMouseButton;
+            _input.BoardButton = _preferences.BoardMouseButton;
+            foreach (var (board, button, item) in items)
+                item.IsChecked = button == (board ? _preferences.BoardMouseButton : _preferences.ToggleMouseButton);
         }
-        return new NativeMenuItem("Bouton de souris pour dessiner") { Menu = menu };
+        NativeMenuItem Menu(string title, bool board)
+        {
+            var menu = new NativeMenu();
+            foreach (var (button, label) in choices)
+            {
+                var item = new NativeMenuItem(label) { ToggleType = MenuItemToggleType.Radio };
+                item.Click += (_, _) =>
+                {
+                    if (board) _preferences.BoardMouseButton = button;
+                    else _preferences.ToggleMouseButton = button;
+                    if (button != MouseButton.NoButton && _preferences.BoardMouseButton == _preferences.ToggleMouseButton)
+                    {
+                        if (board) _preferences.ToggleMouseButton = MouseButton.NoButton;
+                        else _preferences.BoardMouseButton = MouseButton.NoButton;
+                    }
+                    _preferences.Save();
+                    Refresh();
+                };
+                items.Add((board, button, item));
+                menu.Items.Add(item);
+            }
+            return new NativeMenuItem(title) { Menu = menu };
+        }
+        NativeMenuItem[] menus = [Menu("Bouton de souris pour dessiner", board: false), Menu("Bouton de souris pour le tableau", board: true)];
+        Refresh();
+        return menus;
+    }
+
+    /// <summary>
+    /// The board's mouse button: in drawing mode, sends the annotated screen to the board;
+    /// otherwise shows the board, or puts it away when it is already in front.
+    /// </summary>
+    private void ToggleBoard()
+    {
+        if (_overlays!.IsActive) _overlays.SendToBoard();
+        else if (_board != null && _board.WindowState != WindowState.Minimized && Foreground.Contains(_board))
+            _board.WindowState = WindowState.Minimized;
+        else ShowBoard();
     }
 
     /// <summary>A board file opened from the system, or Overboard launched again (null): shows the board.</summary>
@@ -212,10 +242,9 @@ public sealed class App : Application
             _board = new BoardWindow(_settings, BoardWindow.DefaultAutosavePath);
             _board.Closed += (_, _) => _board = null;
             _board.Show();
-            return;
         }
-        if (_board.WindowState == WindowState.Minimized) _board.WindowState = WindowState.Maximized;
-        _board.Activate();
+        else if (_board.WindowState == WindowState.Minimized) _board.WindowState = WindowState.Maximized;
+        Foreground.Bring(_board);
     }
 
     private void OnActiveChanged()
